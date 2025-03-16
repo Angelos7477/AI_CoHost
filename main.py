@@ -1,11 +1,11 @@
 from dotenv import load_dotenv
 import os
+import openai
+import pyttsx3
+import time
+
 load_dotenv()
 openai_api_key = os.getenv("OPENAI_API_KEY")
-
-
-import openai
-
 openai.api_key = openai_api_key
 
 def get_ai_response(prompt):
@@ -15,20 +15,15 @@ def get_ai_response(prompt):
             {"role": "system", "content": "You are a witty game commentator for a League of Legends stream."},
             {"role": "user", "content": prompt}
         ],
-        max_tokens=150
+        max_tokens=50
     )
     return response.choices[0].message["content"]
-
-
-import pyttsx3
 
 def speak_text(text):
     engine = pyttsx3.init()
     engine.setProperty('rate', 160)  # speed
     engine.say(text)
     engine.runAndWait()
-
-    import time
 
 def start_commentator_mode(interval_sec=60):
     while True:
