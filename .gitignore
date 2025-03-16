@@ -1,0 +1,5 @@
+# Ignore environment variables
+.env
+*.log
+config/
+secrets/
