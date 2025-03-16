@@ -3,3 +3,18 @@
 *.log
 config/
 secrets/
+
+# Python
+__pycache__/
+*.pyc
+
+# Virtual Environments
+venv/
+env/
+
+# Logs
+*.log
+
+# IDE files
+.vscode/
+.idea/
