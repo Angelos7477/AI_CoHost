@@ -27,6 +27,8 @@ VOTING_DURATION = 300
 askai_cooldowns = {}
 askai_queue = asyncio.Queue()
 VALID_MODES = ["hype", "coach", "sarcastic", "wholesome"]
+commentator_paused = False  # New flag
+os.makedirs("logs", exist_ok=True)  # Create logs folder if not exist
 
 # === Utility Functions ===
 def get_current_mode():
@@ -66,6 +68,7 @@ async def speak_text(text):
 
 # === AI Commentator Mode ===
 async def start_commentator_mode(interval_sec=60):
+    global commentator_paused
     previous_mode = None
     while True:
         mode = get_current_mode()
@@ -120,6 +123,84 @@ class ZoroTheCasterBot(commands.Bot):
         else:
             result_str = ', '.join([f"{mood}: {count}" for mood, count in vote_counts.items()])
             await ctx.send(f"🗳 Vote results so far: {result_str}")
+    
+    @commands.command(name="cooldown")
+    async def cooldown(self, ctx):
+        user = ctx.author.name
+        now = datetime.now(timezone.utc)
+        last_used = askai_cooldowns.get(user)
+        if not last_used:
+            await ctx.send(f"{user}, you have no active cooldown. You can use !askai.")
+            return
+        remaining = ASKAI_COOLDOWN_SECONDS - int((now - last_used).total_seconds())
+        if remaining <= 0:
+            await ctx.send(f"{user}, your cooldown has expired. You can use !askai now.")
+        else:
+            await ctx.send(f"{user}, you need to wait {remaining} more seconds to use !askai.")
+
+    @commands.command(name="resetcooldowns")
+    async def resetcooldowns(self, ctx):
+        if not ctx.author.is_broadcaster:
+            await ctx.send("❌ Only the streamer can reset cooldowns.")
+            return
+
+        askai_cooldowns.clear()
+        await ctx.send("✅ All !askai cooldowns have been reset by the streamer.")
+
+    @commands.command(name="commands")
+    async def commands_list(self, ctx):
+        commands_text = (
+            "🤖 **ZoroTheCaster Commands:**\n"
+            "🔹 `!vote [mode]` - Vote for AI personality (hype, coach, sarcastic, wholesome)\n"
+            "🔹 `!results` - Show current votes\n"
+            "🔹 `!askai [question]` - Ask the AI (subscribers & mods only)\n"
+            "🔹 `!cooldown` - Check your !askai cooldown\n"
+            "🔹 `!queue` - Shows the number of pending AI questions, Max limit 10\n"
+            "🔹 `!resetcooldowns` - (Streamer only) Reset all cooldowns\n"
+            "🔹 `!clearqueue` - (Streamer only) Clears the queue\n"
+            "🔹 `!pause` / `!resume` - (Streamer only) Pause or resume AI commentary\n"
+            "🔹 `!commands` - Show this list"
+        )
+        await ctx.send(commands_text)
+
+    @commands.command(name="pause")
+    async def pause_commentator(self, ctx):
+        global commentator_paused
+        if ctx.author.is_broadcaster:
+            commentator_paused = True
+            await ctx.send("⏸️ ZoroTheCaster commentary has been paused.")
+        else:
+            await ctx.send("❌ Only the streamer can pause the AI commentator.")
+
+    @commands.command(name="resume")
+    async def resume_commentator(self, ctx):
+        global commentator_paused
+        if ctx.author.is_broadcaster:
+            commentator_paused = False
+            await ctx.send("▶️ ZoroTheCaster commentary has been resumed.")
+        else:
+            await ctx.send("❌ Only the streamer can resume the AI commentator.")
+
+    @commands.command(name="queue")
+    async def queue_length(self, ctx):
+        length = askai_queue.qsize()
+        if length == 0:
+            await ctx.send("📭 The AI queue is currently empty.")
+        else:
+            await ctx.send(f"📬 There are currently {length} question(s) in the queue.")       
+   
+    @commands.command(name="clearqueue")
+    async def clear_queue(self, ctx):
+        if not ctx.author.is_broadcaster:
+            await ctx.send("❌ Only the streamer can clear the AI queue.")
+            return
+        # Clear the queue by emptying it
+        cleared = 0
+        while not askai_queue.empty():
+            askai_queue.get_nowait()
+            askai_queue.task_done()
+            cleared += 1
+        await ctx.send(f"🗑️ AI queue cleared by the streamer. {cleared} item(s) removed.")
 
     @commands.command(name="askai")
     async def askai(self, ctx):
@@ -141,8 +222,13 @@ class ZoroTheCasterBot(commands.Bot):
             await ctx.send("🚫 AI queue is full. Try again later.")
             return
         await ctx.send(f"🧠 {user}, your question is in the queue!")
+        # Log question to file
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with open("logs/askai_log.txt", "a", encoding="utf-8") as log_file:
+            log_file.write(f"[{timestamp}] {user}: {question}\n")
         askai_cooldowns[user] = now
         await askai_queue.put((user, question))
+        await ctx.send(f"{user}, your question is queued at position #{askai_queue.qsize()}")
 
     async def process_askai_queue(self):
         while True:
