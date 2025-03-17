@@ -39,13 +39,14 @@ def load_system_prompt(mode):
 def get_ai_response(prompt, mode):
     system_prompt = load_system_prompt(mode)
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ],
-        max_tokens=100
-    )
+    model="gpt-3.5-turbo",
+    messages=[
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt}
+    ],
+    max_tokens=100,
+    temperature=0.7  # ← More creative personality
+)
     return response.choices[0].message.content
 
 # Speak out loud
