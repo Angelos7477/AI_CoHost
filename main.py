@@ -3,7 +3,9 @@ import os
 import pyttsx3
 import time
 from openai import OpenAI
+import asyncio
 
+tts_lock = asyncio.Lock()
 # Load API Key from .env
 load_dotenv()
 openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -47,25 +49,38 @@ def get_ai_response(prompt, mode):
     return response.choices[0].message.content
 
 # Speak out loud
-def speak_text(text):
-    engine = pyttsx3.init()
-    engine.setProperty('rate', 160)
-    engine.say(text)
-    engine.runAndWait()
+async def speak_text(text):
+    async with tts_lock:
+        engine = pyttsx3.init()
+        engine.setProperty('rate', 160)
+        engine.say(text)
+        engine.runAndWait()
 
 # Commentator loop — speaks every X seconds with updated mood
-def start_commentator_mode(interval_sec=60):
+async def start_commentator_mode(interval_sec=60):
+    previous_mode = None
     while True:
-        mode = get_current_mode()  # 🔥 dynamically get mood before every comment
+        mode = get_current_mode()
+
+        if mode != previous_mode:
+            await speak_text(f"Switching to {mode} mode.")
+            previous_mode = mode
+
         prompt = "Comment on the current state of the game with your personality."
         print(f"🗣 ZoroTheCaster ({mode} mode): Thinking...")
+
         try:
             ai_text = get_ai_response(prompt, mode)
             print(f"[ZoroTheCaster - {mode.upper()}]:", ai_text)
-            speak_text(ai_text)
+            await speak_text(ai_text)
         except Exception as e:
             print("❌ ERROR:", e)
-        time.sleep(interval_sec)
+            await speak_text("Hmm... Something went wrong trying to comment. Try again soon.")
+
+        await asyncio.sleep(interval_sec)
+
+
 
 # Start commentator
-start_commentator_mode(60)
+if __name__ == "__main__":
+    asyncio.run(start_commentator_mode(60))
