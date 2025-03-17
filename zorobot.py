@@ -59,6 +59,11 @@ def get_ai_response(prompt, mode):
     )
     return response.choices[0].message.content
 
+def log_error(error_text):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with open("logs/errors.log", "a", encoding="utf-8") as error_file:
+        error_file.write(f"[{timestamp}] {error_text}\n")
+
 async def speak_text(text):
     async with tts_lock:
         engine = pyttsx3.init()
@@ -81,7 +86,9 @@ async def start_commentator_mode(interval_sec=60):
             print(f"[ZoroTheCaster - {mode.upper()}]:", ai_text)
             await speak_text(ai_text)
         except Exception as e:
-            print("❌ AI Error:", e)
+            error_msg = f"AI Commentator Error (mode={mode}): {e}"
+            print("❌", error_msg)
+            log_error(error_msg)  # 👈 Save to logs/errors.log
             await speak_text("Hmm... Something went wrong trying to comment. Try again soon.")
         await asyncio.sleep(interval_sec)
 
@@ -159,6 +166,7 @@ class ZoroTheCasterBot(commands.Bot):
             "🔹 `!resetcooldowns` - (Streamer only) Reset all cooldowns\n"
             "🔹 `!clearqueue` - (Streamer only) Clears the queue\n"
             "🔹 `!pause` / `!resume` - (Streamer only) Pause or resume AI commentary\n"
+            "🔹 `!status` - Show current mode, queue size, and pause state\n"
             "🔹 `!commands` - Show this list"
         )
         await ctx.send(commands_text)
@@ -202,6 +210,17 @@ class ZoroTheCasterBot(commands.Bot):
             cleared += 1
         await ctx.send(f"🗑️ AI queue cleared by the streamer. {cleared} item(s) removed.")
 
+    @commands.command(name="status")
+    async def status(self, ctx):
+        mode = get_current_mode()
+        queue_size = askai_queue.qsize()
+        paused_text = "⏸️ Paused" if commentator_paused else "▶️ Active"
+        await ctx.send(
+            f"📊 **ZoroTheCaster Status:**\n"
+            f"🔸 Personality: {mode.upper()}\n"
+            f"🔸 Commentary: {paused_text}\n"
+            f"🔸 AskAI Queue: {queue_size} item(s)"
+        )
     @commands.command(name="askai")
     async def askai(self, ctx):
         user = ctx.author.name
@@ -243,7 +262,9 @@ class ZoroTheCasterBot(commands.Bot):
                 else:
                     await self.connected_channels[0].send(f"{user}, ZoroTheCaster answered out loud! (Too long for chat)")
             except Exception as e:
-                print(f"❌ Error in askai: {e}")
+                error_msg = f"Error in askai processing for {user}: {e}"
+                print(f"❌ {error_msg}")
+                log_error(error_msg)
                 await self.connected_channels[0].send(f"❌ {user}, something went wrong with the AI response.")
             askai_queue.task_done()
             await asyncio.sleep(ASKAI_QUEUE_DELAY)
