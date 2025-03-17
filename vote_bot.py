@@ -70,6 +70,13 @@ class ZoroTheCasterBot(commands.Bot):
                 most_voted = Counter(vote_counts).most_common(1)[0]
                 mode, count = most_voted
                 print(f"💡 Switching AI mode to: {mode.upper()} ({count} votes)")
+                 
+                 # 🔥 Write the winning mode to a file
+                try:
+                    with open("current_mode.txt", "w") as f:
+                        f.write(mode)
+                except Exception as e:
+                    print(f"❌ Error writing mode to file: {e}")
 
                 # You can later pass this mode to your AI cohost script here
                 # e.g., write to a file, call a function, etc.
