@@ -56,7 +56,7 @@ def load_system_prompt(mode):
 def get_ai_response(prompt, mode):
     system_prompt = load_system_prompt(mode)
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-3.5-turbo",  #gpt-4o , gpt-3.5-turbo
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
@@ -366,8 +366,8 @@ class ZoroTheCasterBot(commands.Bot):
         try:
             if self.connected_channels:
                 original_length = len(message)
-                if original_length > 460:
-                    message = message[:445] + "... (trimmed)"
+                if original_length > 495:
+                    message = message[:485] + "... (trimmed)"
                 print(f"[DEBUG] Sending to chat: {message} (len={len(message)}/{original_length})")
                 await self.connected_channels[0].send(message)
             else:
