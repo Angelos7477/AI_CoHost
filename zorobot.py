@@ -262,14 +262,13 @@ class ZoroTheCasterBot(commands.Bot):
         if askai_queue.qsize() >= ASKAI_QUEUE_LIMIT:
             await ctx.send("🚫 AI queue is full. Try again later.")
             return
-        await ctx.send(f"🧠 {user}, your question is in the queue!")
         # Log question to file
         timestamp = datetime.now(timezone.utc).isoformat()
         with open("logs/askai_log.txt", "a", encoding="utf-8") as log_file:
             log_file.write(f"[{timestamp}] {user}: {question}\n")
         askai_cooldowns[user] = now
         await askai_queue.put((user, question))
-        await ctx.send(f"{user}, your question is queued at position #{askai_queue.qsize()}")
+        await ctx.send(f"🧠 {user}, your question is queued at position #{askai_queue.qsize()}")
 
     async def process_askai_queue(self):
         while True:
@@ -278,21 +277,16 @@ class ZoroTheCasterBot(commands.Bot):
             try:
                 ai_text = get_ai_response(question, mode)
                 print(f"[ZoroTheCaster AI Answer - {mode.upper()}]:", ai_text)
-
                 await tts_queue.put(ai_text)
-
                 chat_message = f"{user}, ZoroTheCaster says: {ai_text}"
                 await self.send_to_chat(chat_message)
-
             except Exception as e:
                 error_msg = f"Error in askai processing for {user}: {e}"
                 print(f"❌ {error_msg}")
                 log_error(error_msg)
                 await self.send_to_chat(f"❌ {user}, something went wrong with the AI response.")
-
             askai_queue.task_done()
             await asyncio.sleep(ASKAI_QUEUE_DELAY)
-
 
     async def send_to_chat(self, message):
         try:
