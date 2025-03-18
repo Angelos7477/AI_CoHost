@@ -34,6 +34,7 @@ tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 commentator_paused = False  # New flag
 # Global reference to bot instance (initialized later)
 bot_instance = None
+MAX_TTS_QUEUE_SIZE = 10  # Prevents spam/flood
 os.makedirs("logs", exist_ok=True)  # Create logs folder if not exist
 
 # === Utility Functions ===
@@ -64,6 +65,18 @@ def get_ai_response(prompt, mode):
         temperature=0.7
     )
     return response.choices[0].message.content
+
+def get_event_reaction(event_type, user):
+    base_prompt = {
+        "sub": f"{user} just subscribed! React as a hype League of Legends commentator.",
+        "resub": f"{user} just resubscribed! Celebrate it like a shoutcaster.",
+        "raid": f"A raid is happening! {user} brought their viewers! React dramatically.",
+        "cheer": f"{user} just sent some bits! React with high energy and excitement.",
+        "gift": f"{user} just gifted a sub! Celebrate like a caster going wild during a pentakill.",
+        "giftmass": f"{user} started a mass gift sub train! React like the arena is exploding with hype.",
+    }.get(event_type, f"{user} triggered an unknown event. React accordingly.")
+    mode = get_current_mode()
+    return get_ai_response(base_prompt, mode)
 
 def log_error(error_text):
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -96,6 +109,12 @@ async def tts_worker():
             log_error(f"TTS ERROR: {e}")
         tts_queue.task_done()
 
+async def safe_add_to_tts_queue(item):
+    if tts_queue.qsize() < MAX_TTS_QUEUE_SIZE:
+        await tts_queue.put(item)
+    else:
+        log_error(f"[TTS SKIPPED] Queue full. Message skipped: {item}")
+
 # === AI Commentator Mode ===
 async def start_commentator_mode(interval_sec=60):
     global commentator_paused
@@ -106,20 +125,19 @@ async def start_commentator_mode(interval_sec=60):
             continue
         mode = get_current_mode()
         if mode != previous_mode:
-            await tts_queue.put(f"Switching to {mode} mode.")
+            await safe_add_to_tts_queue(f"Switching to {mode} mode.")
             previous_mode = mode
         prompt = "Comment on the current state of the game with your personality."
         try:
             ai_text = get_ai_response(prompt, mode)
             print(f"[ZoroTheCaster - {mode.upper()}]:", ai_text)
-            await tts_queue.put(ai_text)
+            await safe_add_to_tts_queue(ai_text)
         except Exception as e:
             error_msg = f"AI Commentator Error (mode={mode}): {e}"
             print("❌", error_msg)
             log_error(error_msg)  # 👈 Save to logs/errors.log
-            await tts_queue.put("Hmm... Something went wrong trying to comment. Try again soon.")
+            await safe_add_to_tts_queue("Hmm... Something went wrong trying to comment. Try again soon.")
         await asyncio.sleep(interval_sec)
-
 
 # === Twitch Bot ===
 class ZoroTheCasterBot(commands.Bot):
@@ -131,15 +149,63 @@ class ZoroTheCasterBot(commands.Bot):
         print(f"📡 Connected to #{CHANNEL}")
         self.loop.create_task(self.personality_voting_timer())
         self.loop.create_task(self.process_askai_queue())
-        self.loop.create_task(start_commentator_mode(60))
+        #self.loop.create_task(start_commentator_mode(60))
         self.loop.create_task(tts_worker())
 
     async def event_message(self, message):
         if not message.author:
-            return  # Ignore system/unknown messages
+            return
         if message.author.name.lower() == NICK.lower():
             return
+        # 🎁 Detect Gift Sub
+        msg_id = message.tags.get("msg-id")
+        if msg_id == "subgift":
+            user = message.tags.get("login") or message.author.name
+            print(f"🎁 {user} just gifted a sub!")
+            await self.handle_twitch_event("gift", user)
+        # Detect Mass Gift Sub (optional for later)
+        if msg_id == "submysterygift":
+            user = message.tags.get("login") or message.author.name
+            print(f"🎁 {user} started a mass gift sub train!")
+            await self.handle_twitch_event("giftmass", user)
+        # 🔥 Detect Cheers (bits)
+        bits = message.tags.get("bits")
+        if bits:
+            try:
+                bits = int(bits)
+                user = message.author.name
+                print(f"🎉 {user} just sent {bits} bits!")
+                await self.handle_twitch_cheer_event(user, bits) 
+            except Exception as e:
+                log_error(f"[BITS ERROR] Failed to parse bits cheer: {e}")
         await self.handle_commands(message)
+   
+    async def handle_twitch_cheer_event(self, user, bits):
+        try:
+            # Choose hype level based on bits amount
+            if bits < 100:
+                hype_level = "React excitedly but modestly."
+            elif bits < 500:
+                hype_level = "React with hype and enthusiasm, make it sound like a mini-victory!"
+            elif bits < 1000:
+                hype_level = "React dramatically, shoutcaster style! Bring energy and awe!"
+            else:
+                hype_level = "React like it's the biggest moment of the tournament — full hype, over-the-top, explosive excitement!"
+            # Build prompt
+            prompt = f"{user} just sent {bits} bits! {hype_level}"
+            mode = get_current_mode()
+            ai_text = get_ai_response(prompt, mode)
+            print(f"[ZoroTheCaster - BITS REACTION]: {ai_text}")
+            await safe_add_to_tts_queue(ai_text)
+        except Exception as e:
+            log_error(f"[CHEER EVENT ERROR] {e}")
+
+    async def handle_twitch_event(self, event_type, user):
+        try:
+            reaction_text = get_event_reaction(event_type, user)
+            await safe_add_to_tts_queue(reaction_text)
+        except Exception as e:
+            log_error(f"[EVENT ERROR] {event_type} from {user}: {e}")
 
     @commands.command(name="vote")
     async def vote(self, ctx):
@@ -286,7 +352,7 @@ class ZoroTheCasterBot(commands.Bot):
                 ai_text = get_ai_response(question, mode)
                 print(f"[ZoroTheCaster AI Answer - {mode.upper()}]:", ai_text)
                 # Send (user, ai_text) tuple to tts_queue instead of plain text
-                await tts_queue.put((user, ai_text))
+                await safe_add_to_tts_queue((user, ai_text))
             except Exception as e:
                 error_msg = f"Error in askai processing for {user}: {e}"
                 print(f"❌ {error_msg}")
@@ -321,10 +387,10 @@ class ZoroTheCasterBot(commands.Bot):
                     f.write(mode)
                 await self.connected_channels[0].send(
                     f"✨ Voting closed! Winning AI personality: **{mode.upper()}** with {count} votes!")
-                await tts_queue.put(f"The new AI personality is {mode} mode.")
+                await safe_add_to_tts_queue(f"The new AI personality is {mode} mode.")
             else:
                 await self.connected_channels[0].send("🕓 Voting ended, no votes were cast.")
-                await tts_queue.put("The voting period ended with no votes.")
+                await safe_add_to_tts_queue("The voting period ended with no votes.")
             vote_counts.clear()
             await self.connected_channels[0].send("🔄 Votes have been reset. Start voting again!")
 
