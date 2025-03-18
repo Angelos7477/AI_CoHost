@@ -32,6 +32,8 @@ askai_queue = asyncio.Queue()
 VALID_MODES = ["hype", "coach", "sarcastic", "wholesome"]
 tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 commentator_paused = False  # New flag
+# Global reference to bot instance (initialized later)
+bot_instance = None
 os.makedirs("logs", exist_ok=True)  # Create logs folder if not exist
 
 # === Utility Functions ===
@@ -80,9 +82,16 @@ async def speak_text(text):
 
 async def tts_worker():
     while True:
-        text = await tts_queue.get()
+        item = await tts_queue.get()
         try:
-            await speak_text(text)  # runs in background thread
+            if isinstance(item, tuple):
+                user, text = item
+                chat_message = f"{user}, ZoroTheCaster says: {text}"
+                if bot_instance:
+                    await bot_instance.send_to_chat(chat_message)
+            else:
+                text = item  # System message, no user
+            await speak_text(text)
         except Exception as e:
             log_error(f"TTS ERROR: {e}")
         tts_queue.task_done()
@@ -139,7 +148,6 @@ class ZoroTheCasterBot(commands.Bot):
         if len(parts) < 2:
             await ctx.send(f"Usage: !vote [mode] — Valid: {', '.join(VALID_MODES)}")
             return
-
         mood = parts[1]
         if mood in VALID_MODES:
             vote_counts[mood] += 1
@@ -277,9 +285,8 @@ class ZoroTheCasterBot(commands.Bot):
             try:
                 ai_text = get_ai_response(question, mode)
                 print(f"[ZoroTheCaster AI Answer - {mode.upper()}]:", ai_text)
-                await tts_queue.put(ai_text)
-                chat_message = f"{user}, ZoroTheCaster says: {ai_text}"
-                await self.send_to_chat(chat_message)
+                # Send (user, ai_text) tuple to tts_queue instead of plain text
+                await tts_queue.put((user, ai_text))
             except Exception as e:
                 error_msg = f"Error in askai processing for {user}: {e}"
                 print(f"❌ {error_msg}")
@@ -287,6 +294,7 @@ class ZoroTheCasterBot(commands.Bot):
                 await self.send_to_chat(f"❌ {user}, something went wrong with the AI response.")
             askai_queue.task_done()
             await asyncio.sleep(ASKAI_QUEUE_DELAY)
+
 
     async def send_to_chat(self, message):
         try:
@@ -323,4 +331,5 @@ class ZoroTheCasterBot(commands.Bot):
 # === Run the Bot ===
 if __name__ == "__main__":
     bot = ZoroTheCasterBot()
+    bot_instance = bot  # Set global reference so tts_worker can use it
     bot.run()
