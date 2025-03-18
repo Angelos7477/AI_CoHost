@@ -6,12 +6,14 @@ from collections import defaultdict, Counter
 import pyttsx3
 from datetime import datetime, timedelta, timezone
 from openai import OpenAI
+import concurrent.futures
 
 # === Load Environment Variables ===
 load_dotenv()
 TOKEN = os.getenv("TWITCH_TOKEN")
 NICK = os.getenv("TWITCH_NICK")
 CHANNEL = os.getenv("TWITCH_CHANNEL")
+print(f"Loaded channel from .env: {CHANNEL}")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # === OpenAI Setup ===
@@ -19,14 +21,16 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 # === Global Configs ===
 tts_lock = asyncio.Lock()
+tts_queue = asyncio.Queue()
 vote_counts = defaultdict(int)
-ASKAI_COOLDOWN_SECONDS = 180
+ASKAI_COOLDOWN_SECONDS = 10
 ASKAI_QUEUE_LIMIT = 10
-ASKAI_QUEUE_DELAY = 60
+ASKAI_QUEUE_DELAY = 10
 VOTING_DURATION = 300
 askai_cooldowns = {}
 askai_queue = asyncio.Queue()
 VALID_MODES = ["hype", "coach", "sarcastic", "wholesome"]
+tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 commentator_paused = False  # New flag
 os.makedirs("logs", exist_ok=True)  # Create logs folder if not exist
 
@@ -64,12 +68,24 @@ def log_error(error_text):
     with open("logs/errors.log", "a", encoding="utf-8") as error_file:
         error_file.write(f"[{timestamp}] {error_text}\n")
 
+def speak_sync(text):
+    engine = pyttsx3.init()
+    engine.setProperty('rate', 160)
+    engine.say(text)
+    engine.runAndWait()
+
 async def speak_text(text):
-    async with tts_lock:
-        engine = pyttsx3.init()
-        engine.setProperty('rate', 160)
-        engine.say(text)
-        engine.runAndWait()
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(tts_executor, speak_sync, text)
+
+async def tts_worker():
+    while True:
+        text = await tts_queue.get()
+        try:
+            await speak_text(text)  # runs in background thread
+        except Exception as e:
+            log_error(f"TTS ERROR: {e}")
+        tts_queue.task_done()
 
 # === AI Commentator Mode ===
 async def start_commentator_mode(interval_sec=60):
@@ -78,19 +94,20 @@ async def start_commentator_mode(interval_sec=60):
     while True:
         mode = get_current_mode()
         if mode != previous_mode:
-            await speak_text(f"Switching to {mode} mode.")
+            await tts_queue.put(f"Switching to {mode} mode.")
             previous_mode = mode
         prompt = "Comment on the current state of the game with your personality."
         try:
             ai_text = get_ai_response(prompt, mode)
             print(f"[ZoroTheCaster - {mode.upper()}]:", ai_text)
-            await speak_text(ai_text)
+            await tts_queue.put(ai_text)
         except Exception as e:
             error_msg = f"AI Commentator Error (mode={mode}): {e}"
             print("❌", error_msg)
             log_error(error_msg)  # 👈 Save to logs/errors.log
-            await speak_text("Hmm... Something went wrong trying to comment. Try again soon.")
+            await tts_queue.put("Hmm... Something went wrong trying to comment. Try again soon.")
         await asyncio.sleep(interval_sec)
+
 
 # === Twitch Bot ===
 class ZoroTheCasterBot(commands.Bot):
@@ -102,9 +119,12 @@ class ZoroTheCasterBot(commands.Bot):
         print(f"📡 Connected to #{CHANNEL}")
         self.loop.create_task(self.personality_voting_timer())
         self.loop.create_task(self.process_askai_queue())
-        self.loop.create_task(start_commentator_mode(60))
+        self.loop.create_task(start_commentator_mode(600))
+        self.loop.create_task(tts_worker())
 
     async def event_message(self, message):
+        if not message.author:
+            return  # Ignore system/unknown messages
         if message.author.name.lower() == NICK.lower():
             return
         await self.handle_commands(message)
@@ -157,19 +177,15 @@ class ZoroTheCasterBot(commands.Bot):
     @commands.command(name="commands")
     async def commands_list(self, ctx):
         commands_text = (
-            "🤖 **ZoroTheCaster Commands:**\n"
-            "🔹 `!vote [mode]` - Vote for AI personality (hype, coach, sarcastic, wholesome)\n"
-            "🔹 `!results` - Show current votes\n"
-            "🔹 `!askai [question]` - Ask the AI (subscribers & mods only)\n"
-            "🔹 `!cooldown` - Check your !askai cooldown\n"
-            "🔹 `!queue` - Shows the number of pending AI questions, Max limit 10\n"
-            "🔹 `!resetcooldowns` - (Streamer only) Reset all cooldowns\n"
-            "🔹 `!clearqueue` - (Streamer only) Clears the queue\n"
-            "🔹 `!pause` / `!resume` - (Streamer only) Pause or resume AI commentary\n"
-            "🔹 `!status` - Show current mode, queue size, and pause state\n"
-            "🔹 `!commands` - Show this list"
+            "🤖 Commands: "
+            "🗳 `!vote` | 📊 `!results` | 🧠 `!askai` | ⏱ `!cooldown` | 📬 `!queue` | 📈 !status | 📄 `!commands` "
+            #" ⏸ `!pause` | ▶ `!resume` | ♻ `!resetcooldowns` | 🗑 `!clearqueue`"
         )
         await ctx.send(commands_text)
+
+    @commands.command(name="hello")
+    async def hello(self, ctx):
+        await ctx.send(f"Hello {ctx.author.name}! I'm ZoroTheCaster. 😊")
 
     @commands.command(name="pause")
     async def pause_commentator(self, ctx):
@@ -256,7 +272,7 @@ class ZoroTheCasterBot(commands.Bot):
             try:
                 ai_text = get_ai_response(question, mode)
                 print(f"[ZoroTheCaster AI Answer - {mode.upper()}]:", ai_text)
-                await speak_text(ai_text)
+                await tts_queue.put(ai_text)
                 if len(ai_text) <= 200:
                     await self.connected_channels[0].send(f"{user}, ZoroTheCaster says: {ai_text}")
                 else:
@@ -279,8 +295,10 @@ class ZoroTheCasterBot(commands.Bot):
                     f.write(mode)
                 await self.connected_channels[0].send(
                     f"✨ Voting closed! Winning AI personality: **{mode.upper()}** with {count} votes!")
+                await tts_queue.put(f"The new AI personality is {mode} mode.")
             else:
                 await self.connected_channels[0].send("🕓 Voting ended, no votes were cast.")
+                await tts_queue.put("The voting period ended with no votes.")
             vote_counts.clear()
             await self.connected_channels[0].send("🔄 Votes have been reset. Start voting again!")
 
