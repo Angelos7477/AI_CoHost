@@ -92,6 +92,9 @@ async def start_commentator_mode(interval_sec=60):
     global commentator_paused
     previous_mode = None
     while True:
+        if commentator_paused:
+            await asyncio.sleep(interval_sec)
+            continue
         mode = get_current_mode()
         if mode != previous_mode:
             await tts_queue.put(f"Switching to {mode} mode.")
@@ -119,7 +122,7 @@ class ZoroTheCasterBot(commands.Bot):
         print(f"📡 Connected to #{CHANNEL}")
         self.loop.create_task(self.personality_voting_timer())
         self.loop.create_task(self.process_askai_queue())
-        self.loop.create_task(start_commentator_mode(600))
+        self.loop.create_task(start_commentator_mode(60))
         self.loop.create_task(tts_worker())
 
     async def event_message(self, message):
@@ -136,10 +139,12 @@ class ZoroTheCasterBot(commands.Bot):
         if len(parts) < 2:
             await ctx.send(f"Usage: !vote [mode] — Valid: {', '.join(VALID_MODES)}")
             return
+
         mood = parts[1]
         if mood in VALID_MODES:
             vote_counts[mood] += 1
-            await ctx.send(f"{ctx.author.name} voted for '{mood}'! 👍")
+            total_votes = vote_counts[mood]
+            await ctx.send(f"{ctx.author.name} voted for '{mood}'! Total votes for {mood}: {total_votes}")
         else:
             await ctx.send(f"❌ Invalid mood. Options: {', '.join(VALID_MODES)}")
 
@@ -237,6 +242,7 @@ class ZoroTheCasterBot(commands.Bot):
             f"🔸 Commentary: {paused_text}\n"
             f"🔸 AskAI Queue: {queue_size} item(s)"
         )
+
     @commands.command(name="askai")
     async def askai(self, ctx):
         user = ctx.author.name
@@ -272,18 +278,36 @@ class ZoroTheCasterBot(commands.Bot):
             try:
                 ai_text = get_ai_response(question, mode)
                 print(f"[ZoroTheCaster AI Answer - {mode.upper()}]:", ai_text)
+
                 await tts_queue.put(ai_text)
-                if len(ai_text) <= 200:
-                    await self.connected_channels[0].send(f"{user}, ZoroTheCaster says: {ai_text}")
-                else:
-                    await self.connected_channels[0].send(f"{user}, ZoroTheCaster answered out loud! (Too long for chat)")
+
+                chat_message = f"{user}, ZoroTheCaster says: {ai_text}"
+                await self.send_to_chat(chat_message)
+
             except Exception as e:
                 error_msg = f"Error in askai processing for {user}: {e}"
                 print(f"❌ {error_msg}")
                 log_error(error_msg)
-                await self.connected_channels[0].send(f"❌ {user}, something went wrong with the AI response.")
+                await self.send_to_chat(f"❌ {user}, something went wrong with the AI response.")
+
             askai_queue.task_done()
             await asyncio.sleep(ASKAI_QUEUE_DELAY)
+
+
+    async def send_to_chat(self, message):
+        try:
+            if self.connected_channels:
+                original_length = len(message)
+                if original_length > 460:
+                    message = message[:445] + "... (trimmed)"
+                print(f"[DEBUG] Sending to chat: {message} (len={len(message)}/{original_length})")
+                await self.connected_channels[0].send(message)
+            else:
+                print("[WARNING] No connected channel found to send message.")
+                log_error("[WARNING] Tried to send message but no connected_channels.")
+        except Exception as e:
+            log_error(f"[SEND ERROR]: {e}")
+            print(f"❌ Chat send error: {e}")
 
     async def personality_voting_timer(self):
         while True:
