@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from openai import OpenAI
 import concurrent.futures
 from shutdown_hooks import setup_shutdown_hooks
+from ai_utils import get_ai_response, get_current_mode, get_event_reaction, load_system_prompt
+
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -23,10 +25,10 @@ CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
 USER_TOKEN = os.getenv("TWITCH_USER_TOKEN")
 USER_REFRESH_TOKEN = os.getenv("TWITCH_REFRESH_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+#OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # === OpenAI Setup ===
-client = OpenAI(api_key=OPENAI_API_KEY)
+#client = OpenAI(api_key=OPENAI_API_KEY)
 
 # === Global Configs ===
 tts_lock = asyncio.Lock()
@@ -50,46 +52,6 @@ EVENTSUB_RESERVED_SLOTS = MAX_TTS_QUEUE_SIZE - ASKAI_TTS_RESERVED_LIMIT
 os.makedirs("logs", exist_ok=True)  # Create logs folder if not exist
 
 # === Utility Functions ===
-def get_current_mode():
-    try:
-        with open("current_mode.txt", "r") as f:
-            mode = f.read().strip().lower()
-            return mode if mode in VALID_MODES else "hype"
-    except FileNotFoundError:
-        return "hype"
-
-def load_system_prompt(mode):
-    try:
-        with open(f"prompts/{mode}.txt", "r", encoding="utf-8") as f:
-            return f.read()
-    except FileNotFoundError:
-        return "You are a witty League of Legends commentator."
-
-def get_ai_response(prompt, mode):
-    system_prompt = load_system_prompt(mode)
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",  #gpt-4o , gpt-3.5-turbo
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ],
-        max_tokens=100,
-        temperature=0.7
-    )
-    return response.choices[0].message.content
-
-def get_event_reaction(event_type, user):
-    base_prompt = {
-        "sub": f"{user} just subscribed! React as a hype League of Legends commentator.",
-        "resub": f"{user} just resubscribed! Celebrate it like a shoutcaster.",
-        "raid": f"A raid is happening! {user} brought their viewers! React dramatically.",
-        "cheer": f"{user} just sent some bits! React with high energy and excitement.",
-        "gift": f"{user} just gifted a sub! Celebrate like a caster going wild during a pentakill.",
-        "giftmass": f"{user} started a mass gift sub train! React like the arena is exploding with hype.",
-    }.get(event_type, f"{user} triggered an unknown event. React accordingly.")
-    mode = get_current_mode()
-    return get_ai_response(base_prompt, mode)
-
 def log_error(error_text):
     timestamp = datetime.now(timezone.utc).isoformat()
     with open("logs/errors.log", "a", encoding="utf-8") as error_file:
@@ -201,7 +163,6 @@ class ZoroTheCasterBot(commands.Bot):
             print("🔄 Initializing Twitch API client...")
             self.twitch_api = await Twitch(CLIENT_ID, CLIENT_SECRET)
             print("✅ Twitch API client created.")
-
             print("🔄 Setting user authentication...")
             if asyncio.iscoroutinefunction(self.twitch_api.set_user_authentication):
                 print("⚠ set_user_authentication is async — awaiting it...")
@@ -217,7 +178,6 @@ class ZoroTheCasterBot(commands.Bot):
                     refresh_token=USER_REFRESH_TOKEN
                 )
             print("✅ Authentication set successfully.")
-
             print("🔄 Fetching user ID from Twitch API...")
             user_id = None
             async for user in self.twitch_api.get_users(logins=[CHANNEL]):
@@ -227,34 +187,26 @@ class ZoroTheCasterBot(commands.Bot):
             if not user_id:
                 raise Exception("❌ Failed to retrieve user ID from Twitch API.")
             print(f"✅ Retrieved user ID: {user_id}")
-
             print("🔄 Creating EventSub WebSocket...")
             self.eventsub_ws = EventSubWebsocket(self.twitch_api)
             print("✅ EventSub WebSocket instance created.")
-
             print("🔄 Starting WebSocket session...")
             self.eventsub_ws.start()  # Not awaitable
             print("✅ WebSocket session started.")
-
             print("🔄 Subscribing to events...")
             await self.eventsub_ws.listen_channel_subscribe(user_id, self.on_subscribe_event)
             print("✅ Subscribed to channel_subscribe")
-
             await self.eventsub_ws.listen_channel_cheer(user_id, self.on_cheer_event)
             print("✅ Subscribed to channel_cheer")
-
             await self.eventsub_ws.listen_channel_subscription_gift(user_id, self.on_gift_event)
             print("✅ Subscribed to channel_subscription_gift")
-
             # ✅ RAID event: fix callback position
             await self.eventsub_ws.listen_channel_raid(
                 callback=self.on_raid_event,
                 to_broadcaster_user_id=user_id
             )
             print("✅ Subscribed to channel_raid")
-
             print("🎉 EventSub WebSocket fully connected and listening to events!")
-
         except Exception as e:
             log_error(f"[EVENTSUB INIT ERROR]: {repr(e)}")
             print(f"❌ EventSub connection failed. Reason: {e}. Retrying in 10 seconds...")
@@ -268,9 +220,7 @@ class ZoroTheCasterBot(commands.Bot):
             return
         user = event['user_name']
         print(f"[SUB EVENT] {user} just subscribed!")
-        prompt = f"{user} just subscribed! React as a hype League of Legends commentator."
-        mode = get_current_mode()
-        ai_text = get_ai_response(prompt, mode)
+        ai_text = get_event_reaction("sub", user)
         await safe_add_to_tts_queue(ai_text)
 
     async def on_cheer_event(self, event):
@@ -280,9 +230,7 @@ class ZoroTheCasterBot(commands.Bot):
         user = event['user_name']
         bits = event['bits']
         print(f"[CHEER EVENT] {user} sent {bits} bits!")
-        prompt = f"{user} sent {bits} bits! React with excitement as a shoutcaster."
-        mode = get_current_mode()
-        ai_text = get_ai_response(prompt, mode)
+        ai_text = get_event_reaction("cheer", user)
         await safe_add_to_tts_queue(ai_text)
 
     async def on_raid_event(self, event: ChannelRaidEvent):
@@ -294,9 +242,7 @@ class ZoroTheCasterBot(commands.Bot):
             user = event.from_broadcaster_user_name
             viewers = event.viewers
             print(f"[RAID EVENT] {user} raided with {viewers} viewers!")
-            prompt = f"{user} raided with {viewers} viewers! React like the crowd is going wild."
-            mode = get_current_mode()
-            ai_text = get_ai_response(prompt, mode)
+            ai_text = get_event_reaction("raid", user)
             await safe_add_to_tts_queue(ai_text)
         except Exception as e:
             print("❌ Failed to process raid event:", e)
@@ -309,9 +255,7 @@ class ZoroTheCasterBot(commands.Bot):
         user = event['user_name']
         total = event['total']
         print(f"[GIFT EVENT] {user} gifted {total} sub(s)!")
-        prompt = f"{user} just gifted {total} sub(s)! React like a League shoutcaster going wild during a teamfight!"
-        mode = get_current_mode()
-        ai_text = get_ai_response(prompt, mode)
+        ai_text = get_event_reaction("gift", user)
         await safe_add_to_tts_queue(ai_text)
 
     async def event_message(self, message):

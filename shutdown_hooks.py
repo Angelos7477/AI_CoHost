@@ -11,7 +11,6 @@ def list_all_threads():
 def setup_shutdown_hooks(bot_instance=None, executor=None):
     def graceful_shutdown(signum, frame):
         print("\n🛑 Ctrl+C or Termination Signal received! Shutting down...")
-
         if bot_instance and hasattr(bot_instance, "eventsub_ws"):
             print("🧹 Stopping EventSub WebSocket...")
             try:
