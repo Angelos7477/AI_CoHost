@@ -12,8 +12,9 @@ from datetime import datetime, timedelta, timezone
 from openai import OpenAI
 import concurrent.futures
 from shutdown_hooks import setup_shutdown_hooks
-from ai_utils import get_ai_response, get_current_mode, get_event_reaction, load_system_prompt
-
+#from ai_utils import get_ai_response, get_current_mode, get_event_reaction, VALID_MODES
+#from tts_utils import tts_worker, safe_add_to_tts_queue, shutdown_tts_executor, tts_queue, tts_lock, tts_executor
+#from log_utils import log_error, log_event, log_askai_question
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -25,38 +26,33 @@ CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
 USER_TOKEN = os.getenv("TWITCH_USER_TOKEN")
 USER_REFRESH_TOKEN = os.getenv("TWITCH_REFRESH_TOKEN")
-#OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # === OpenAI Setup ===
-#client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # === Global Configs ===
-tts_lock = asyncio.Lock()
-tts_queue = asyncio.Queue()
+VALID_MODES = ["hype", "coach", "sarcastic", "wholesome"]
 vote_counts = defaultdict(int)
+tts_lock = asyncio.Lock()
+tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+tts_queue = asyncio.Queue()
 ASKAI_COOLDOWN_SECONDS = 10
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
 VOTING_DURATION = 300
 askai_cooldowns = {}
 askai_queue = asyncio.Queue()
-VALID_MODES = ["hype", "coach", "sarcastic", "wholesome"]
-tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 commentator_paused = False  # New flag
 eventsub_paused = False
 # Global reference to bot instance (initialized later)
 bot_instance = None
+os.makedirs("logs", exist_ok=True)
 MAX_TTS_QUEUE_SIZE = 10  # Prevents spam/flood
 ASKAI_TTS_RESERVED_LIMIT = 7  # Maximum messages askai is allowed to use in TTS queue
 EVENTSUB_RESERVED_SLOTS = MAX_TTS_QUEUE_SIZE - ASKAI_TTS_RESERVED_LIMIT
-os.makedirs("logs", exist_ok=True)  # Create logs folder if not exist
 
 # === Utility Functions ===
-def log_error(error_text):
-    timestamp = datetime.now(timezone.utc).isoformat()
-    with open("logs/errors.log", "a", encoding="utf-8") as error_file:
-        error_file.write(f"[{timestamp}] {error_text}\n")
-
 def debug_imports():
     print("\n=== DEBUG: Import Origins ===")
     try:
@@ -80,6 +76,45 @@ def debug_imports():
     except Exception as e:
         print("❌ Error checking OpenAI client:", e)
     print("=== End of Import Debug ===\n")
+
+def get_current_mode():
+    try:
+        with open("current_mode.txt", "r") as f:
+            mode = f.read().strip().lower()
+            return mode if mode in VALID_MODES else "hype"
+    except FileNotFoundError:
+        return "hype"
+
+def load_system_prompt(mode):
+    try:
+        with open(f"prompts/{mode}.txt", "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "You are a witty League of Legends commentator."
+    
+def get_ai_response(prompt, mode):
+    system_prompt = load_system_prompt(mode)
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",  #gpt-4o , gpt-3.5-turbo
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ],
+        max_tokens=100,
+        temperature=0.7
+    )
+    return response.choices[0].message.content
+
+def get_event_reaction(event_type, user):
+    base_prompt = {
+        "sub": f"{user} just subscribed! React as a hype League of Legends commentator.",
+        "resub": f"{user} just resubscribed! Celebrate it like a shoutcaster.",
+        "raid": f"A raid is happening! {user} brought their viewers! React dramatically.",
+        "cheer": f"{user} just sent some bits! React with high energy and excitement.",
+        "gift": f"{user} just gifted a sub! Celebrate like a caster going wild during a pentakill.",
+        "giftmass": f"{user} started a mass gift sub train! React like the arena is exploding with hype.",
+    }.get(event_type, f"{user} triggered an unknown event. React accordingly.")
+    return get_ai_response(base_prompt, get_current_mode())
 
 def speak_sync(text):
     engine = pyttsx3.init()
@@ -117,6 +152,11 @@ async def safe_add_to_tts_queue(item):
         log_error(f"[EVENTSUB TTS SKIPPED] Queue full. EventSub message skipped: {item}")
         return
     await tts_queue.put(item)
+
+def log_error(error_text: str):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with open("logs/errors.log", "a", encoding="utf-8") as error_file:
+        error_file.write(f"[{timestamp}] {error_text}\n")
 
 # === AI Commentator Mode ===
 async def start_commentator_mode(interval_sec=60):
@@ -212,7 +252,6 @@ class ZoroTheCasterBot(commands.Bot):
             print(f"❌ EventSub connection failed. Reason: {e}. Retrying in 10 seconds...")
             await asyncio.sleep(10)
             await self.init_eventsub()
-
 
     async def on_subscribe_event(self, event):
         if eventsub_paused:
@@ -420,7 +459,6 @@ class ZoroTheCasterBot(commands.Bot):
                 await self.send_to_chat(f"❌ {user}, something went wrong with the AI response.")
             askai_queue.task_done()
             await asyncio.sleep(ASKAI_QUEUE_DELAY)
-
 
     async def send_to_chat(self, message):
         try:
