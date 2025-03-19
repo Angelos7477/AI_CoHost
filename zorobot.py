@@ -1,12 +1,17 @@
 import os
 import asyncio
 from dotenv import load_dotenv
-from twitchio.ext import commands
+from twitchAPI.twitch import Twitch
+from twitchAPI.eventsub.websocket import EventSubWebsocket
+from twitchAPI.oauth import AuthScope
+from twitchAPI.object.eventsub import ChannelRaidEvent
 from collections import defaultdict, Counter
+from twitchio.ext import commands
 import pyttsx3
 from datetime import datetime, timedelta, timezone
 from openai import OpenAI
 import concurrent.futures
+from shutdown_hooks import setup_shutdown_hooks
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -14,6 +19,10 @@ TOKEN = os.getenv("TWITCH_TOKEN")
 NICK = os.getenv("TWITCH_NICK")
 CHANNEL = os.getenv("TWITCH_CHANNEL")
 print(f"Loaded channel from .env: {CHANNEL}")
+CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
+CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
+USER_TOKEN = os.getenv("TWITCH_USER_TOKEN")
+USER_REFRESH_TOKEN = os.getenv("TWITCH_REFRESH_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # === OpenAI Setup ===
@@ -32,9 +41,12 @@ askai_queue = asyncio.Queue()
 VALID_MODES = ["hype", "coach", "sarcastic", "wholesome"]
 tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 commentator_paused = False  # New flag
+eventsub_paused = False
 # Global reference to bot instance (initialized later)
 bot_instance = None
 MAX_TTS_QUEUE_SIZE = 10  # Prevents spam/flood
+ASKAI_TTS_RESERVED_LIMIT = 7  # Maximum messages askai is allowed to use in TTS queue
+EVENTSUB_RESERVED_SLOTS = MAX_TTS_QUEUE_SIZE - ASKAI_TTS_RESERVED_LIMIT
 os.makedirs("logs", exist_ok=True)  # Create logs folder if not exist
 
 # === Utility Functions ===
@@ -83,6 +95,30 @@ def log_error(error_text):
     with open("logs/errors.log", "a", encoding="utf-8") as error_file:
         error_file.write(f"[{timestamp}] {error_text}\n")
 
+def debug_imports():
+    print("\n=== DEBUG: Import Origins ===")
+    try:
+        print("TwitchAPI.Twitch:", Twitch.__module__)
+    except Exception as e:
+        print("❌ Error checking Twitch:", e)
+    try:
+        print("TwitchAPI.EventSubWebsocket:", EventSubWebsocket.__module__)
+    except Exception as e:
+        print("❌ Error checking EventSubWebsocket:", e)
+    try:
+        print("TwitchAPI.AuthScope:", AuthScope.__module__)
+    except Exception as e:
+        print("❌ Error checking AuthScope:", e)
+    try:
+        print("TwitchIO.commands.Bot:", commands.Bot.__module__)
+    except Exception as e:
+        print("❌ Error checking commands.Bot:", e)
+    try:
+        print("OpenAI.Client:", OpenAI.__module__)
+    except Exception as e:
+        print("❌ Error checking OpenAI client:", e)
+    print("=== End of Import Debug ===\n")
+
 def speak_sync(text):
     engine = pyttsx3.init()
     engine.setProperty('rate', 160)
@@ -110,10 +146,15 @@ async def tts_worker():
         tts_queue.task_done()
 
 async def safe_add_to_tts_queue(item):
-    if tts_queue.qsize() < MAX_TTS_QUEUE_SIZE:
-        await tts_queue.put(item)
-    else:
-        log_error(f"[TTS SKIPPED] Queue full. Message skipped: {item}")
+    queue_size = tts_queue.qsize()
+    is_askai = isinstance(item, tuple) and isinstance(item[0], str)  # AskAI messages are (user, text)
+    if is_askai and queue_size >= ASKAI_TTS_RESERVED_LIMIT:
+        log_error(f"[ASKAI TTS SKIPPED] AskAI message dropped due to reserved space for EventSub.")
+        return
+    if not is_askai and queue_size >= MAX_TTS_QUEUE_SIZE:
+        log_error(f"[EVENTSUB TTS SKIPPED] Queue full. EventSub message skipped: {item}")
+        return
+    await tts_queue.put(item)
 
 # === AI Commentator Mode ===
 async def start_commentator_mode(interval_sec=60):
@@ -143,6 +184,8 @@ async def start_commentator_mode(interval_sec=60):
 class ZoroTheCasterBot(commands.Bot):
     def __init__(self):
         super().__init__(token=TOKEN, prefix="!", initial_channels=[CHANNEL])
+        self.twitch_api = None
+        self.eventsub_ws = None
 
     async def event_ready(self):
         print(f"✅ Logged in as {self.nick}")
@@ -151,61 +194,132 @@ class ZoroTheCasterBot(commands.Bot):
         self.loop.create_task(self.process_askai_queue())
         #self.loop.create_task(start_commentator_mode(60))
         self.loop.create_task(tts_worker())
+        await self.init_eventsub()
+    
+    async def init_eventsub(self):
+        try:
+            print("🔄 Initializing Twitch API client...")
+            self.twitch_api = await Twitch(CLIENT_ID, CLIENT_SECRET)
+            print("✅ Twitch API client created.")
+
+            print("🔄 Setting user authentication...")
+            if asyncio.iscoroutinefunction(self.twitch_api.set_user_authentication):
+                print("⚠ set_user_authentication is async — awaiting it...")
+                await self.twitch_api.set_user_authentication(
+                    USER_TOKEN,
+                    [AuthScope.BITS_READ, AuthScope.CHANNEL_READ_SUBSCRIPTIONS],
+                    refresh_token=USER_REFRESH_TOKEN
+                )
+            else:
+                self.twitch_api.set_user_authentication(
+                    USER_TOKEN,
+                    [AuthScope.BITS_READ, AuthScope.CHANNEL_READ_SUBSCRIPTIONS],
+                    refresh_token=USER_REFRESH_TOKEN
+                )
+            print("✅ Authentication set successfully.")
+
+            print("🔄 Fetching user ID from Twitch API...")
+            user_id = None
+            async for user in self.twitch_api.get_users(logins=[CHANNEL]):
+                print(f"➡ Found user: {user.display_name}, ID: {user.id}")
+                user_id = user.id
+                break
+            if not user_id:
+                raise Exception("❌ Failed to retrieve user ID from Twitch API.")
+            print(f"✅ Retrieved user ID: {user_id}")
+
+            print("🔄 Creating EventSub WebSocket...")
+            self.eventsub_ws = EventSubWebsocket(self.twitch_api)
+            print("✅ EventSub WebSocket instance created.")
+
+            print("🔄 Starting WebSocket session...")
+            self.eventsub_ws.start()  # Not awaitable
+            print("✅ WebSocket session started.")
+
+            print("🔄 Subscribing to events...")
+            await self.eventsub_ws.listen_channel_subscribe(user_id, self.on_subscribe_event)
+            print("✅ Subscribed to channel_subscribe")
+
+            await self.eventsub_ws.listen_channel_cheer(user_id, self.on_cheer_event)
+            print("✅ Subscribed to channel_cheer")
+
+            await self.eventsub_ws.listen_channel_subscription_gift(user_id, self.on_gift_event)
+            print("✅ Subscribed to channel_subscription_gift")
+
+            # ✅ RAID event: fix callback position
+            await self.eventsub_ws.listen_channel_raid(
+                callback=self.on_raid_event,
+                to_broadcaster_user_id=user_id
+            )
+            print("✅ Subscribed to channel_raid")
+
+            print("🎉 EventSub WebSocket fully connected and listening to events!")
+
+        except Exception as e:
+            log_error(f"[EVENTSUB INIT ERROR]: {repr(e)}")
+            print(f"❌ EventSub connection failed. Reason: {e}. Retrying in 10 seconds...")
+            await asyncio.sleep(10)
+            await self.init_eventsub()
+
+
+    async def on_subscribe_event(self, event):
+        if eventsub_paused:
+            print("[EVENTSUB PAUSED] Skipped sub reaction.")
+            return
+        user = event['user_name']
+        print(f"[SUB EVENT] {user} just subscribed!")
+        prompt = f"{user} just subscribed! React as a hype League of Legends commentator."
+        mode = get_current_mode()
+        ai_text = get_ai_response(prompt, mode)
+        await safe_add_to_tts_queue(ai_text)
+
+    async def on_cheer_event(self, event):
+        if eventsub_paused:
+            print("[EVENTSUB PAUSED] Skipped cheer reaction.")
+            return
+        user = event['user_name']
+        bits = event['bits']
+        print(f"[CHEER EVENT] {user} sent {bits} bits!")
+        prompt = f"{user} sent {bits} bits! React with excitement as a shoutcaster."
+        mode = get_current_mode()
+        ai_text = get_ai_response(prompt, mode)
+        await safe_add_to_tts_queue(ai_text)
+
+    async def on_raid_event(self, event: ChannelRaidEvent):
+        if eventsub_paused:
+            print("[EVENTSUB PAUSED] Skipped raid reaction.")
+            return
+        print("[DEBUG] Raid Event Object:", event)
+        try:
+            user = event.from_broadcaster_user_name
+            viewers = event.viewers
+            print(f"[RAID EVENT] {user} raided with {viewers} viewers!")
+            prompt = f"{user} raided with {viewers} viewers! React like the crowd is going wild."
+            mode = get_current_mode()
+            ai_text = get_ai_response(prompt, mode)
+            await safe_add_to_tts_queue(ai_text)
+        except Exception as e:
+            print("❌ Failed to process raid event:", e)
+            log_error(f"[RAID EVENT ERROR]: {e}")
+
+    async def on_gift_event(self, event):
+        if eventsub_paused:
+            print("[EVENTSUB PAUSED] Skipped giftsub reaction.")
+            return
+        user = event['user_name']
+        total = event['total']
+        print(f"[GIFT EVENT] {user} gifted {total} sub(s)!")
+        prompt = f"{user} just gifted {total} sub(s)! React like a League shoutcaster going wild during a teamfight!"
+        mode = get_current_mode()
+        ai_text = get_ai_response(prompt, mode)
+        await safe_add_to_tts_queue(ai_text)
 
     async def event_message(self, message):
         if not message.author:
             return
         if message.author.name.lower() == NICK.lower():
             return
-        # 🎁 Detect Gift Sub
-        msg_id = message.tags.get("msg-id")
-        if msg_id == "subgift":
-            user = message.tags.get("login") or message.author.name
-            print(f"🎁 {user} just gifted a sub!")
-            await self.handle_twitch_event("gift", user)
-        # Detect Mass Gift Sub (optional for later)
-        if msg_id == "submysterygift":
-            user = message.tags.get("login") or message.author.name
-            print(f"🎁 {user} started a mass gift sub train!")
-            await self.handle_twitch_event("giftmass", user)
-        # 🔥 Detect Cheers (bits)
-        bits = message.tags.get("bits")
-        if bits:
-            try:
-                bits = int(bits)
-                user = message.author.name
-                print(f"🎉 {user} just sent {bits} bits!")
-                await self.handle_twitch_cheer_event(user, bits) 
-            except Exception as e:
-                log_error(f"[BITS ERROR] Failed to parse bits cheer: {e}")
         await self.handle_commands(message)
-   
-    async def handle_twitch_cheer_event(self, user, bits):
-        try:
-            # Choose hype level based on bits amount
-            if bits < 100:
-                hype_level = "React excitedly but modestly."
-            elif bits < 500:
-                hype_level = "React with hype and enthusiasm, make it sound like a mini-victory!"
-            elif bits < 1000:
-                hype_level = "React dramatically, shoutcaster style! Bring energy and awe!"
-            else:
-                hype_level = "React like it's the biggest moment of the tournament — full hype, over-the-top, explosive excitement!"
-            # Build prompt
-            prompt = f"{user} just sent {bits} bits! {hype_level}"
-            mode = get_current_mode()
-            ai_text = get_ai_response(prompt, mode)
-            print(f"[ZoroTheCaster - BITS REACTION]: {ai_text}")
-            await safe_add_to_tts_queue(ai_text)
-        except Exception as e:
-            log_error(f"[CHEER EVENT ERROR] {e}")
-
-    async def handle_twitch_event(self, event_type, user):
-        try:
-            reaction_text = get_event_reaction(event_type, user)
-            await safe_add_to_tts_queue(reaction_text)
-        except Exception as e:
-            log_error(f"[EVENT ERROR] {event_type} from {user}: {e}")
 
     @commands.command(name="vote")
     async def vote(self, ctx):
@@ -271,7 +385,8 @@ class ZoroTheCasterBot(commands.Bot):
         global commentator_paused
         if ctx.author.is_broadcaster:
             commentator_paused = True
-            await ctx.send("⏸️ ZoroTheCaster commentary has been paused.")
+            eventsub_paused = True
+            await ctx.send("⏸️ ZoroTheCaster commentary and event reactions are paused.")
         else:
             await ctx.send("❌ Only the streamer can pause the AI commentator.")
 
@@ -280,7 +395,8 @@ class ZoroTheCasterBot(commands.Bot):
         global commentator_paused
         if ctx.author.is_broadcaster:
             commentator_paused = False
-            await ctx.send("▶️ ZoroTheCaster commentary has been resumed.")
+            eventsub_paused = False
+            await ctx.send("▶️ ZoroTheCaster commentary and event reactions are resumed.")
         else:
             await ctx.send("❌ Only the streamer can resume the AI commentator.")
 
@@ -333,8 +449,8 @@ class ZoroTheCasterBot(commands.Bot):
         if not question:
             await ctx.send("Usage: !askai [your question]")
             return
-        if askai_queue.qsize() >= ASKAI_QUEUE_LIMIT:
-            await ctx.send("🚫 AI queue is full. Try again later.")
+        if askai_queue.qsize() >= ASKAI_TTS_RESERVED_LIMIT:
+            await ctx.send("🚫 AskAI is currently overloaded with responses. Please try again soon.")
             return
         # Log question to file
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -396,6 +512,8 @@ class ZoroTheCasterBot(commands.Bot):
 
 # === Run the Bot ===
 if __name__ == "__main__":
+    debug_imports()
     bot = ZoroTheCasterBot()
-    bot_instance = bot  # Set global reference so tts_worker can use it
+    bot_instance = bot
+    setup_shutdown_hooks(bot_instance=bot, executor=tts_executor)
     bot.run()
