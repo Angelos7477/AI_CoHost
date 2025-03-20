@@ -21,6 +21,12 @@ def setup_shutdown_hooks(bot_instance=None, executor=None):
                     loop.run_until_complete(bot_instance.eventsub_ws.stop())
             except Exception as e:
                 print(f"⚠️ WebSocket shutdown error: {e}")
+        if hasattr(bot_instance, "obs_controller"):
+            try:
+                bot_instance.obs_controller.disconnect()
+                print("🔌 OBS WebSocket disconnected.")
+            except Exception as e:
+                print(f"⚠ Failed to disconnect OBS cleanly: {e}")
 
         if executor:
             print("🧹 Shutting down TTS executor...")
@@ -28,7 +34,7 @@ def setup_shutdown_hooks(bot_instance=None, executor=None):
                 executor.shutdown(wait=False)
             except Exception as e:
                 print(f"⚠️ TTS executor shutdown error: {e}")
-
+                
         list_all_threads()
         os._exit(0)
 

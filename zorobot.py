@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from openai import OpenAI
 import concurrent.futures
 from shutdown_hooks import setup_shutdown_hooks
+from obs_controller import OBSController
 #from ai_utils import get_ai_response, get_current_mode, get_event_reaction, VALID_MODES
 #from tts_utils import tts_worker, safe_add_to_tts_queue, shutdown_tts_executor, tts_queue, tts_lock, tts_executor
 #from log_utils import log_error, log_event, log_askai_question
@@ -188,6 +189,8 @@ class ZoroTheCasterBot(commands.Bot):
         super().__init__(token=TOKEN, prefix="!", initial_channels=[CHANNEL])
         self.twitch_api = None
         self.eventsub_ws = None
+        self.obs_controller = OBSController()
+        self.obs_controller.connect()
 
     async def event_ready(self):
         print(f"✅ Logged in as {self.nick}")
