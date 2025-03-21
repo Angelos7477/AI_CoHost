@@ -131,8 +131,8 @@ async def tts_worker():
     while True:
         item = await tts_queue.get()
         try:
-            if isinstance(item, tuple):
-                user, text = item
+            if isinstance(item, tuple) and item[0] in ("askai", "event"):
+                _, user, text = item
                 chat_message = f"{user}, ZoroTheCaster says: {text}"
                 if bot_instance:
                     await bot_instance.send_to_chat(chat_message)
@@ -145,7 +145,7 @@ async def tts_worker():
 
 async def safe_add_to_tts_queue(item):
     queue_size = tts_queue.qsize()
-    is_askai = isinstance(item, tuple) and isinstance(item[0], str)  # AskAI messages are (user, text)
+    is_askai = isinstance(item, tuple) and item[0] == "askai"
     if is_askai and queue_size >= ASKAI_TTS_RESERVED_LIMIT:
         log_error(f"[ASKAI TTS SKIPPED] AskAI message dropped due to reserved space for EventSub.")
         return
@@ -256,49 +256,65 @@ class ZoroTheCasterBot(commands.Bot):
             await asyncio.sleep(10)
             await self.init_eventsub()
 
+    async def auto_hide_event_overlay(self, delay=6):
+        await asyncio.sleep(delay)
+        if hasattr(self, "obs_controller"):
+            self.obs_controller.set_text("Event_Display", "")
+
     async def on_subscribe_event(self, event):
         if eventsub_paused:
-            print("[EVENTSUB PAUSED] Skipped sub reaction.")
             return
         user = event['user_name']
         print(f"[SUB EVENT] {user} just subscribed!")
         ai_text = get_event_reaction("sub", user)
-        await safe_add_to_tts_queue(ai_text)
+        await safe_add_to_tts_queue(("event", user, ai_text))
+        await self.send_to_chat(f"🎉 {user} just subscribed! 💬 ZoroTheCaster is reacting...")
+        if hasattr(self, "obs_controller"):
+            self.obs_controller.update_event_overlay(f"🎉 {user} just subscribed!")
+            self.loop.create_task(self.auto_hide_event_overlay())
 
     async def on_cheer_event(self, event):
         if eventsub_paused:
-            print("[EVENTSUB PAUSED] Skipped cheer reaction.")
             return
         user = event['user_name']
         bits = event['bits']
         print(f"[CHEER EVENT] {user} sent {bits} bits!")
         ai_text = get_event_reaction("cheer", user)
-        await safe_add_to_tts_queue(ai_text)
+        await safe_add_to_tts_queue(("event", user, ai_text))
+        await self.send_to_chat(f"💎 {user} just cheered {bits} bits! 💬 ZoroTheCaster is reacting...")
+        if hasattr(self, "obs_controller"):
+            self.obs_controller.update_event_overlay(f"💎 {user} cheered {bits} bits!")
+            self.loop.create_task(self.auto_hide_event_overlay())
 
     async def on_raid_event(self, event: ChannelRaidEvent):
         if eventsub_paused:
-            print("[EVENTSUB PAUSED] Skipped raid reaction.")
             return
-        print("[DEBUG] Raid Event Object:", event)
         try:
             user = event.from_broadcaster_user_name
             viewers = event.viewers
             print(f"[RAID EVENT] {user} raided with {viewers} viewers!")
             ai_text = get_event_reaction("raid", user)
-            await safe_add_to_tts_queue(ai_text)
+            await safe_add_to_tts_queue(("event", user, ai_text))
+            await self.send_to_chat(f"⚔️ {user} just raided with {viewers} viewers! 💬 ZoroTheCaster is reacting...")
+            if hasattr(self, "obs_controller"):
+                self.obs_controller.update_event_overlay(f"⚔️ {user} raided with {viewers} viewers!")
+                self.loop.create_task(self.auto_hide_event_overlay())
         except Exception as e:
             print("❌ Failed to process raid event:", e)
             log_error(f"[RAID EVENT ERROR]: {e}")
 
     async def on_gift_event(self, event):
         if eventsub_paused:
-            print("[EVENTSUB PAUSED] Skipped giftsub reaction.")
             return
         user = event['user_name']
         total = event['total']
         print(f"[GIFT EVENT] {user} gifted {total} sub(s)!")
         ai_text = get_event_reaction("gift", user)
-        await safe_add_to_tts_queue(ai_text)
+        await safe_add_to_tts_queue(("event", user, ai_text))
+        await self.send_to_chat(f"🎁 {user} just gifted {total} sub(s)! 💬 ZoroTheCaster is reacting...")
+        if hasattr(self, "obs_controller"):
+            self.obs_controller.update_event_overlay(f"🎁 {user} gifted {total} sub(s)!")
+            self.loop.create_task(self.auto_hide_event_overlay())
 
     async def event_message(self, message):
         if not message.author:
@@ -306,6 +322,16 @@ class ZoroTheCasterBot(commands.Bot):
         if message.author.name.lower() == NICK.lower():
             return
         await self.handle_commands(message)
+
+    async def auto_hide_event_overlay(self, delay=6):
+        await asyncio.sleep(delay)
+        if hasattr(self, "obs_controller"):
+            self.obs_controller.set_text("Event_Display", "")
+
+    async def auto_hide_askai_overlay(self, delay=10):
+        await asyncio.sleep(delay)
+        if hasattr(self, "obs_controller"):
+            self.obs_controller.set_text("AskAI_Display", "")
 
     @commands.command(name="vote")
     async def vote(self, ctx):
@@ -419,6 +445,35 @@ class ZoroTheCasterBot(commands.Bot):
             f"🔸 AskAI Queue: {queue_size} item(s)"
         )
 
+    @commands.command(name="testcheer")
+    async def test_cheer_command(self, ctx):
+        print(f"🔥 TESTCHEER triggered by {ctx.author.name}")
+        await self.send_to_chat(f"🎉 Simulating cheer event from {ctx.author.name}")
+        fake_event = {'user_name': ctx.author.name, 'bits': 100}
+        await self.on_cheer_event(fake_event)
+
+    @commands.command(name="testgift")
+    async def test_gift_command(self, ctx):
+        print(f"🔥 TESTGIFT triggered by {ctx.author.name}")
+        await self.send_to_chat(f"🎁 Simulating gift event from {ctx.author.name}")
+        fake_event = {'user_name': ctx.author.name, 'total': 5}
+        await self.on_gift_event(fake_event)
+
+    @commands.command(name="testsub")
+    async def test_sub_command(self, ctx):
+        print(f"🔥 TESTSUB triggered by {ctx.author.name}")
+        await self.send_to_chat(f"📢 Simulating subscription from {ctx.author.name}")
+        await self.on_subscribe_event({'user_name': ctx.author.name})
+
+    @commands.command(name="testraid")
+    async def test_raid_command(self, ctx):
+        print(f"🔥 TESTRAID triggered by {ctx.author.name}")
+        await self.send_to_chat(f"⚔️ Simulating raid event from {ctx.author.name}")
+        class FakeRaidEvent:
+            from_broadcaster_user_name = ctx.author.name
+            viewers = 42
+        await self.on_raid_event(FakeRaidEvent())
+
     @commands.command(name="askai")
     async def askai(self, ctx):
         user = ctx.author.name
@@ -454,7 +509,11 @@ class ZoroTheCasterBot(commands.Bot):
                 ai_text = get_ai_response(question, mode)
                 print(f"[ZoroTheCaster AI Answer - {mode.upper()}]:", ai_text)
                 # Send (user, ai_text) tuple to tts_queue instead of plain text
-                await safe_add_to_tts_queue((user, ai_text))
+                await safe_add_to_tts_queue(("askai", user, ai_text))
+                # 🔥 Update AskAI OBS overlay
+                if hasattr(self, "obs_controller"):
+                    self.obs_controller.update_ai_overlay(question, ai_text)
+                    self.loop.create_task(self.auto_hide_askai_overlay())
             except Exception as e:
                 error_msg = f"Error in askai processing for {user}: {e}"
                 print(f"❌ {error_msg}")
@@ -501,4 +560,5 @@ if __name__ == "__main__":
     bot = ZoroTheCasterBot()
     bot_instance = bot
     setup_shutdown_hooks(bot_instance=bot, executor=tts_executor)
+
     bot.run()

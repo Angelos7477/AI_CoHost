@@ -84,7 +84,12 @@ class OBSController:
 
     def update_ai_overlay(self, question: str, answer: str, source_name="AskAI_Display"):
         try:
-            display_text = f"🧠 AskAI Q: {question}\n💬 AI says: {answer}"
+            display_text = (
+                "🧠 **AskAI Question**\n"
+                f"➡ {question}\n\n"
+                "💬 **AI's Answer**\n"
+                f"➡ {answer}"
+            )
             self.set_text(source_name, display_text)
             log_obs_event(f"Updated AskAI text overlay (Q&A)")
         except Exception as e:
@@ -100,6 +105,13 @@ class OBSController:
         except Exception as e:
             print(f"❌ Error getting scene item ID for '{source_name}': {e}")
             return None
+        
+    def update_event_overlay(self, text, source_name="Event_Display"):
+        try:
+            self.set_text(source_name, text)
+            log_obs_event(f"Updated Event overlay: {text}")
+        except Exception as e:
+            print(f"❌ Failed to update event overlay: {e}")
 
     def get_current_scene(self):
         try:
