@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AskAI Overlay</title>
+  <link rel="stylesheet" href="askai_style.css">
+</head>
+<body>
+  <div id="container" class="hidden">
+    <div class="section">
+      <div class="label">🧠 AskAI Question:</div>
+      <div id="askai-question" class="content">Waiting for a question...</div>
+    </div>
+    <div class="section">
+      <div class="label">💬 AI Says:</div>
+      <div id="askai-answer" class="content">...</div>
+    </div>
+  </div>
+
+  <script>
+    let lastQuestion = "";
+    let lastAnswer = "";
+    let hideTimeout;
+    let isVisible = false;
+  
+    function showOverlay() {
+  const container = document.getElementById("container");
+
+  // Smooth fade in even if file refreshed
+  setTimeout(() => {
+    container.classList.add("visible");
+  }, 100); // slight delay
+  isVisible = true;
+
+  clearTimeout(hideTimeout);
+  hideTimeout = setTimeout(() => {
+    container.classList.remove("visible");
+    isVisible = false;
+  }, 10000);
+}
+  
+    function updateOverlay(q, a) {
+      if (q === lastQuestion && a === lastAnswer) return;
+  
+      lastQuestion = q;
+      lastAnswer = a;
+  
+      document.getElementById("askai-question").textContent = q;
+      document.getElementById("askai-answer").textContent = a;
+      showOverlay();
+    }
+  
+    function fetchAndUpdate() {
+      fetch("askai_data.txt?t=" + Date.now())
+        .then(res => res.text())
+        .then(data => {
+          const [q, a] = data.split("||");
+          const qText = (q || "").trim();
+          const aText = (a || "").trim();
+          updateOverlay(qText, aText);
+        })
+        .catch(err => console.error("Fetch error:", err));
+    }
+  
+    setInterval(fetchAndUpdate, 800);
+  </script>
+</body>
+</html>

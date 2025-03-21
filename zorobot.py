@@ -13,6 +13,7 @@ from openai import OpenAI
 import concurrent.futures
 from shutdown_hooks import setup_shutdown_hooks
 from obs_controller import OBSController
+from obs_controller import log_obs_event
 #from ai_utils import get_ai_response, get_current_mode, get_event_reaction, VALID_MODES
 #from tts_utils import tts_worker, safe_add_to_tts_queue, shutdown_tts_executor, tts_queue, tts_lock, tts_executor
 #from log_utils import log_error, log_event, log_askai_question
@@ -38,7 +39,7 @@ vote_counts = defaultdict(int)
 tts_lock = asyncio.Lock()
 tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 tts_queue = asyncio.Queue()
-ASKAI_COOLDOWN_SECONDS = 10
+ASKAI_COOLDOWN_SECONDS = 1
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
 VOTING_DURATION = 300
@@ -132,16 +133,39 @@ async def tts_worker():
         item = await tts_queue.get()
         try:
             if isinstance(item, tuple) and item[0] in ("askai", "event"):
-                _, user, text = item
-                chat_message = f"{user}, ZoroTheCaster says: {text}"
-                if bot_instance:
-                    await bot_instance.send_to_chat(chat_message)
+                item_type = item[0]
+                if item_type == "askai":
+                    _, user, question, answer = item
+                    chat_message = f"{user}, ZoroTheCaster says: {answer}"
+                    if bot_instance:
+                        await bot_instance.send_to_chat(chat_message)
+                    # ✅ Delegate everything to the unified overlay method
+                    if hasattr(bot_instance, "obs_controller"):
+                        try:
+                            bot_instance.obs_controller.update_ai_overlay(question, answer)
+                            bot_instance.loop.create_task(bot_instance.auto_hide_askai_overlay())
+                        except Exception as e:
+                            log_error(f"[OBS AskAI Update Error] {e}")
+                    await speak_text(answer)
+                elif item_type == "event":
+                    _, user, text = item
+                    chat_message = f"{user}, ZoroTheCaster says: {text}"
+                    if bot_instance:
+                        await bot_instance.send_to_chat(chat_message)
+                    if hasattr(bot_instance, "obs_controller"):
+                        try:
+                            bot_instance.obs_controller.update_event_overlay(text)
+                            bot_instance.loop.create_task(bot_instance.auto_hide_event_overlay())
+                        except Exception as e:
+                            log_error(f"[OBS Event Overlay Update Error] {e}")
+                    await speak_text(text)
             else:
-                text = item  # System message, no user
-            await speak_text(text)
+                # Plain system message
+                await speak_text(item)
         except Exception as e:
             log_error(f"TTS ERROR: {e}")
         tts_queue.task_done()
+
 
 async def safe_add_to_tts_queue(item):
     queue_size = tts_queue.qsize()
@@ -322,11 +346,6 @@ class ZoroTheCasterBot(commands.Bot):
         if message.author.name.lower() == NICK.lower():
             return
         await self.handle_commands(message)
-
-    async def auto_hide_event_overlay(self, delay=6):
-        await asyncio.sleep(delay)
-        if hasattr(self, "obs_controller"):
-            self.obs_controller.set_text("Event_Display", "")
 
     async def auto_hide_askai_overlay(self, delay=10):
         await asyncio.sleep(delay)
@@ -509,11 +528,8 @@ class ZoroTheCasterBot(commands.Bot):
                 ai_text = get_ai_response(question, mode)
                 print(f"[ZoroTheCaster AI Answer - {mode.upper()}]:", ai_text)
                 # Send (user, ai_text) tuple to tts_queue instead of plain text
-                await safe_add_to_tts_queue(("askai", user, ai_text))
-                # 🔥 Update AskAI OBS overlay
-                if hasattr(self, "obs_controller"):
-                    self.obs_controller.update_ai_overlay(question, ai_text)
-                    self.loop.create_task(self.auto_hide_askai_overlay())
+                await safe_add_to_tts_queue(("askai", user, question, ai_text))
+            # ✅ Write to askai_data.txt for HTML/CSS Overlay (OBS Browser Source)
             except Exception as e:
                 error_msg = f"Error in askai processing for {user}: {e}"
                 print(f"❌ {error_msg}")
@@ -560,5 +576,4 @@ if __name__ == "__main__":
     bot = ZoroTheCasterBot()
     bot_instance = bot
     setup_shutdown_hooks(bot_instance=bot, executor=tts_executor)
-
     bot.run()

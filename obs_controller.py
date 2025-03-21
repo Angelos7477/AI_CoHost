@@ -10,10 +10,13 @@ from datetime import datetime, timezone
 load_dotenv()
 
 def log_obs_event(text: str):
-    timestamp = datetime.now(timezone.utc).isoformat()
-    os.makedirs("logs", exist_ok=True)  # Ensure logs/ exists
-    with open("logs/obs.log", "a", encoding="utf-8") as log_file:
-        log_file.write(f"[{timestamp}] {text}\n")
+    try:
+        timestamp = datetime.now(timezone.utc).isoformat()
+        os.makedirs("logs", exist_ok=True)
+        with open("logs/obs.log", "a", encoding="utf-8") as log_file:
+            log_file.write(f"[{timestamp}] {text}\n")
+    except Exception as e:
+        print(f"[ERROR] Failed to write OBS log: {e}")
 
 class OBSController:
     def __init__(self, host=None, port=None, password=None):
@@ -84,6 +87,7 @@ class OBSController:
 
     def update_ai_overlay(self, question: str, answer: str, source_name="AskAI_Display"):
         try:
+            # Update OBS text source (optional visual fallback)
             display_text = (
                 "🧠 **AskAI Question**\n"
                 f"➡ {question}\n\n"
@@ -91,9 +95,21 @@ class OBSController:
                 f"➡ {answer}"
             )
             self.set_text(source_name, display_text)
-            log_obs_event(f"Updated AskAI text overlay (Q&A)")
+            log_obs_event("Updated AskAI text overlay (Q&A)")
+
+            # 🔥 Write HTML overlay data: atomic write via temp file → rename
+            os.makedirs("overlays", exist_ok=True)
+            temp_path = "overlays/askai_data_temp.txt"
+            final_path = "overlays/askai_data.txt"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                f.write(f"{question}||{answer}")
+            os.replace(temp_path, final_path)  # Atomic rename
+
+            log_obs_event("Updated AskAI HTML overlay data (atomic write)")
         except Exception as e:
             print(f"❌ Failed to update AskAI overlay: {e}")
+            log_obs_event(f"❌ Failed to update AskAI overlay: {e}")
+
 
     def get_scene_item_id(self, source_name, scene_name):
         try:
