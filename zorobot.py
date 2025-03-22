@@ -14,9 +14,8 @@ import concurrent.futures
 from shutdown_hooks import setup_shutdown_hooks
 from obs_controller import OBSController
 from obs_controller import log_obs_event
-#from ai_utils import get_ai_response, get_current_mode, get_event_reaction, VALID_MODES
-#from tts_utils import tts_worker, safe_add_to_tts_queue, shutdown_tts_executor, tts_queue, tts_lock, tts_executor
-#from log_utils import log_error, log_event, log_askai_question
+from overlay_ws_server import start_server as start_overlay_ws_server
+from overlay_push import push_askai_overlay
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -53,6 +52,7 @@ os.makedirs("logs", exist_ok=True)
 MAX_TTS_QUEUE_SIZE = 10  # Prevents spam/flood
 ASKAI_TTS_RESERVED_LIMIT = 7  # Maximum messages askai is allowed to use in TTS queue
 EVENTSUB_RESERVED_SLOTS = MAX_TTS_QUEUE_SIZE - ASKAI_TTS_RESERVED_LIMIT
+overlay_ws_task = None
 
 # === Utility Functions ===
 def debug_imports():
@@ -146,6 +146,11 @@ async def tts_worker():
                             bot_instance.loop.create_task(bot_instance.auto_hide_askai_overlay())
                         except Exception as e:
                             log_error(f"[OBS AskAI Update Error] {e}")
+                    # ✅ Push to Overlay WebSocket!
+                    try:
+                        await push_askai_overlay(question, answer)
+                    except Exception as e:
+                        log_error(f"[Overlay Push AskAI ERROR] {e}")
                     await speak_text(answer)
                 elif item_type == "event":
                     _, user, text = item
@@ -158,6 +163,12 @@ async def tts_worker():
                             bot_instance.loop.create_task(bot_instance.auto_hide_event_overlay())
                         except Exception as e:
                             log_error(f"[OBS Event Overlay Update Error] {e}")
+                    # ✅ Push to Overlay WebSocket!
+                    try:
+                        from overlay_push import push_event_overlay
+                        await push_event_overlay(text)
+                    except Exception as e:
+                        log_error(f"[Overlay Push Event ERROR] {e}")
                     await speak_text(text)
             else:
                 # Plain system message
@@ -573,7 +584,15 @@ class ZoroTheCasterBot(commands.Bot):
 # === Run the Bot ===
 if __name__ == "__main__":
     debug_imports()
-    bot = ZoroTheCasterBot()
-    bot_instance = bot
-    setup_shutdown_hooks(bot_instance=bot, executor=tts_executor)
-    bot.run()
+    setup_shutdown_hooks(bot_instance=None, executor=tts_executor)
+    async def startup_tasks():
+        # Start WebSocket overlay server
+        global overlay_ws_task
+        overlay_ws_task = asyncio.create_task(start_overlay_ws_server())
+        # Start the Twitch bot
+        bot = ZoroTheCasterBot()
+        global bot_instance
+        bot_instance = bot
+        setup_shutdown_hooks(bot_instance=bot, executor=tts_executor)
+        await bot.start()
+    asyncio.run(startup_tasks())

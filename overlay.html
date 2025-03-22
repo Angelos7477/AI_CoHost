@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Overlay Panel</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: rgba(0, 0, 0, 0.0); /* Transparent for OBS */
+      font-family: sans-serif;
+      color: white;
+    }
+    #overlay-content {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      font-size: 24px;
+      padding: 14px 24px;
+      background: rgba(0, 0, 0, 0.7);
+      border-radius: 16px;
+      max-width: 60%;
+      white-space: pre-wrap;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.6);
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay-content">🔍 Waiting for overlay data...</div>
+
+  <script>
+    const overlay = document.getElementById("overlay-content");
+    let ws = null;
+    let reconnectTimeout = null;
+
+    function connectWS() {
+      console.log("[HTML] 🔄 Connecting to WebSocket...");
+      ws = new WebSocket("ws://127.0.0.1:8765");
+
+      ws.onopen = () => {
+        console.log("[HTML] ✅ WebSocket connected");
+        overlay.textContent = "✅ Overlay connected. Waiting for updates...";
+        if (reconnectTimeout) {
+          clearTimeout(reconnectTimeout);
+          reconnectTimeout = null;
+        }
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        console.log("[HTML] 📩 Message received:", data);
+
+        if (data.type === "mood") {
+          overlay.textContent = `🧠 Mood: ${data.text}`;
+        } else if (data.type === "event") {
+          overlay.textContent = `🎉 Event: ${data.content}`;
+        } else if (data.type === "askai") {
+          overlay.textContent = `❓ ${data.question}\n💬 ${data.answer}`;
+        } else if (data.type === "commentary") {
+          overlay.textContent = `🎙️ Commentary: ${data.text}`;
+        } else {
+          overlay.textContent = `📦 Unknown message: ${JSON.stringify(data)}`;
+        }
+      };
+
+      ws.onerror = (e) => {
+        console.log("[HTML] ❌ WebSocket error:", e);
+        tryReconnect();
+      };
+
+      ws.onclose = () => {
+        console.log("[HTML] ⚠️ WebSocket connection closed");
+        tryReconnect();
+      };
+    }
+
+    function tryReconnect() {
+      if (!reconnectTimeout) {
+        overlay.textContent = "⚠️ Disconnected. Trying to reconnect in 5s...";
+        reconnectTimeout = setTimeout(() => {
+          reconnectTimeout = null;
+          connectWS();
+        }, 5000);
+      }
+    }
+
+    connectWS(); // Start initial connection
+  </script>
+</body>
+</html>

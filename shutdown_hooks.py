@@ -34,6 +34,13 @@ def setup_shutdown_hooks(bot_instance=None, executor=None):
                 executor.shutdown(wait=False)
             except Exception as e:
                 print(f"⚠️ TTS executor shutdown error: {e}")
+        try:
+            from zorobot import overlay_ws_task
+            if overlay_ws_task and not overlay_ws_task.done():
+                print("🧹 Cancelling Overlay WebSocket server task...")
+                overlay_ws_task.cancel()
+        except Exception as e:
+            print(f"⚠️ Failed to cancel overlay_ws_task cleanly: {e}")
                 
         list_all_threads()
         os._exit(0)
