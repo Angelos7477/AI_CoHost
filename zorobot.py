@@ -12,10 +12,11 @@ from datetime import datetime, timedelta, timezone
 from openai import OpenAI
 import concurrent.futures
 from shutdown_hooks import setup_shutdown_hooks
-from obs_controller import OBSController
-from obs_controller import log_obs_event
+from obs_controller import OBSController, log_obs_event
 from overlay_ws_server import start_server as start_overlay_ws_server
-from overlay_push import push_askai_overlay
+from overlay_push import push_askai_overlay, push_event_overlay
+import requests
+import time
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -31,6 +32,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # === OpenAI Setup ===
 client = OpenAI(api_key=OPENAI_API_KEY)
+RIOT_API_KEY = os.getenv("RIOT_API_KEY") 
 
 # === Global Configs ===
 VALID_MODES = ["hype", "coach", "sarcastic", "wholesome"]
@@ -53,6 +55,20 @@ MAX_TTS_QUEUE_SIZE = 10  # Prevents spam/flood
 ASKAI_TTS_RESERVED_LIMIT = 7  # Maximum messages askai is allowed to use in TTS queue
 EVENTSUB_RESERVED_SLOTS = MAX_TTS_QUEUE_SIZE - ASKAI_TTS_RESERVED_LIMIT
 overlay_ws_task = None
+# 💡 Adjustable polling interval (every 3s)
+POLL_INTERVAL = 3
+LIVE_CLIENT_URL = "http://127.0.0.1:2999/liveclientdata/allgamedata"
+# Basic state snapshot for change detection
+previous_state = {
+    "kills": 0,
+    "deaths": 0,
+    "assists": 0,
+    "cs": 0,
+    "last_hp": 1000,
+    "last_damage_timestamp": 0,
+    "last_trigger_time": 0
+}
+
 
 # === Utility Functions ===
 def debug_imports():
@@ -165,7 +181,6 @@ async def tts_worker():
                             log_error(f"[OBS Event Overlay Update Error] {e}")
                     # ✅ Push to Overlay WebSocket!
                     try:
-                        from overlay_push import push_event_overlay
                         await push_event_overlay(text)
                     except Exception as e:
                         log_error(f"[Overlay Push Event ERROR] {e}")
@@ -193,6 +208,58 @@ def log_error(error_text: str):
     timestamp = datetime.now(timezone.utc).isoformat()
     with open("logs/errors.log", "a", encoding="utf-8") as error_file:
         error_file.write(f"[{timestamp}] {error_text}\n")
+
+
+async def game_data_loop():
+    print("🕹️ Game Data Monitor started.")
+    while True:
+        try:
+            response = requests.get(LIVE_CLIENT_URL, timeout=2)
+            if response.status_code != 200:
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
+            data = response.json()
+            player = data.get("activePlayer", {})
+            scores = player.get("scores", {})
+            hp = player.get("championStats", {}).get("currentHealth", 0)
+            timestamp_now = time.time()
+            kills = scores.get("kills", 0)
+            deaths = scores.get("deaths", 0)
+            assists = scores.get("assists", 0)
+            cs = scores.get("creepScore", 0)
+            # Check for new kill
+            if kills > previous_state["kills"]:
+                diff = kills - previous_state["kills"]
+                mode = get_current_mode()
+                prompt = f"React as a hype LoL caster to {diff} new kill(s)."
+                ai_text = get_ai_response(prompt, mode)
+                await safe_add_to_tts_queue(ai_text)
+            # Clutch escape detection (big HP drop but survived)
+            damage_taken = previous_state["last_hp"] - hp
+            if damage_taken > 300 and hp > 100:
+                if timestamp_now - previous_state["last_damage_timestamp"] > 20:
+                    previous_state["last_damage_timestamp"] = timestamp_now
+                    mode = get_current_mode()
+                    prompt = "Player just barely escaped a fight with low HP. React like a caster to this clutch escape!"
+                    ai_text = get_ai_response(prompt, mode)
+                    await safe_add_to_tts_queue(ai_text)
+            # CS Milestone
+            if cs >= previous_state["cs"] + 30:
+                mode = get_current_mode()
+                prompt = f"Player just crossed {cs} CS. React as a caster about their farming power."
+                ai_text = get_ai_response(prompt, mode)
+                await safe_add_to_tts_queue(ai_text)
+            # Update previous state
+            previous_state.update({
+                "kills": kills,
+                "deaths": deaths,
+                "assists": assists,
+                "cs": cs,
+                "last_hp": hp
+            })
+        except Exception as e:
+            print(f"[GameMonitor Error]: {e}")
+        await asyncio.sleep(POLL_INTERVAL)
 
 # === AI Commentator Mode ===
 async def start_commentator_mode(interval_sec=60):
@@ -449,7 +516,7 @@ class ZoroTheCasterBot(commands.Bot):
             await ctx.send("📭 The AI queue is currently empty.")
         else:
             await ctx.send(f"📬 There are currently {length} question(s) in the queue.")       
-   
+
     @commands.command(name="clearqueue")
     async def clear_queue(self, ctx):
         if not ctx.author.is_broadcaster:
@@ -589,6 +656,8 @@ if __name__ == "__main__":
         # Start WebSocket overlay server
         global overlay_ws_task
         overlay_ws_task = asyncio.create_task(start_overlay_ws_server())
+        # ✅ Start Game Data Monitor (new line here!)
+        asyncio.create_task(game_data_loop())
         # Start the Twitch bot
         bot = ZoroTheCasterBot()
         global bot_instance

@@ -11,25 +11,46 @@
       font-family: sans-serif;
       color: white;
     }
-    #overlay-content {
+
+    #askai-overlay, #commentary-overlay, #event-overlay {
       position: absolute;
-      top: 20px;
-      left: 20px;
-      font-size: 24px;
-      padding: 14px 24px;
-      background: rgba(0, 0, 0, 0.7);
-      border-radius: 16px;
+      padding: 12px 20px;
+      font-size: 20px;
+      background: rgba(20, 20, 20, 0.8);
+      border-radius: 12px;
       max-width: 60%;
       white-space: pre-wrap;
       box-shadow: 0 0 10px rgba(0, 0, 0, 0.6);
     }
+
+    #askai-overlay {
+      bottom: 10%;
+      left: 5%;
+    }
+
+    #commentary-overlay {
+      top: 10%;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    #event-overlay {
+      top: 10%;
+      right: 5%;
+    }
   </style>
 </head>
 <body>
-  <div id="overlay-content">🔍 Waiting for overlay data...</div>
+
+  <div id="askai-overlay">❓ Waiting for AskAI...</div>
+  <div id="commentary-overlay">🎙️ Waiting for Commentary...</div>
+  <div id="event-overlay">🎉 Waiting for Events...</div>
 
   <script>
-    const overlay = document.getElementById("overlay-content");
+    const askaiDiv = document.getElementById("askai-overlay");
+    const commentaryDiv = document.getElementById("commentary-overlay");
+    const eventDiv = document.getElementById("event-overlay");
+
     let ws = null;
     let reconnectTimeout = null;
 
@@ -39,7 +60,6 @@
 
       ws.onopen = () => {
         console.log("[HTML] ✅ WebSocket connected");
-        overlay.textContent = "✅ Overlay connected. Waiting for updates...";
         if (reconnectTimeout) {
           clearTimeout(reconnectTimeout);
           reconnectTimeout = null;
@@ -50,16 +70,17 @@
         const data = JSON.parse(event.data);
         console.log("[HTML] 📩 Message received:", data);
 
-        if (data.type === "mood") {
-          overlay.textContent = `🧠 Mood: ${data.text}`;
-        } else if (data.type === "event") {
-          overlay.textContent = `🎉 Event: ${data.content}`;
-        } else if (data.type === "askai") {
-          overlay.textContent = `❓ ${data.question}\n💬 ${data.answer}`;
+        if (data.type === "askai") {
+          askaiDiv.textContent = `❓ ${data.question}\n💬 ${data.answer}`;
         } else if (data.type === "commentary") {
-          overlay.textContent = `🎙️ Commentary: ${data.text}`;
+          commentaryDiv.textContent = `🎙️ ${data.text}`;
+        } else if (data.type === "event") {
+          eventDiv.textContent = `🎉 ${data.content}`;
+        } else if (data.type === "mood") {
+          // Optional: use this to change a header or apply a style
+          console.log("🔄 Mood update:", data.text);
         } else {
-          overlay.textContent = `📦 Unknown message: ${JSON.stringify(data)}`;
+          console.log("⚠️ Unknown message type:", data);
         }
       };
 
@@ -76,7 +97,6 @@
 
     function tryReconnect() {
       if (!reconnectTimeout) {
-        overlay.textContent = "⚠️ Disconnected. Trying to reconnect in 5s...";
         reconnectTimeout = setTimeout(() => {
           reconnectTimeout = null;
           connectWS();
@@ -84,7 +104,7 @@
       }
     }
 
-    connectWS(); // Start initial connection
+    connectWS();
   </script>
 </body>
 </html>
