@@ -224,6 +224,7 @@ def log_error(error_text: str):
 
 async def game_data_loop():
     print("🕹️ Game Data Monitor started.")
+    initialized = False
     while True:
         try:
             response = requests.get(LIVE_CLIENT_URL, timeout=5, verify=False)
@@ -239,31 +240,51 @@ async def game_data_loop():
             deaths = scores.get("deaths", 0)
             assists = scores.get("assists", 0)
             cs = scores.get("creepScore", 0)
-            # Check for new kill
+            # 🆕 Initialize state from current game snapshot
+            if not previous_state.get("initialized"):
+                previous_state.update({
+                    "kills": kills,
+                    "deaths": deaths,
+                    "assists": assists,
+                    "cs": cs,
+                    "last_hp": hp,
+                    "last_damage_timestamp": timestamp_now,
+                    "last_trigger_time": timestamp_now,
+                    "last_cs_milestone": (cs // 30) * 30,
+                    "initialized": True
+                })
+                print("📡 Initialized game_data_loop with current stats.")
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
+            print(f"[GameLoop] K/D/A: {kills}/{deaths}/{assists}, CS: {cs}, HP: {hp}")
+            # 🔥 Kills
             if kills > previous_state["kills"]:
-                print(f"[KILL DETECTED] {previous_state['kills']} → {kills}")
                 diff = kills - previous_state["kills"]
+                print(f"[KILL DETECTED] {previous_state['kills']} → {kills}")
                 mode = get_current_mode()
                 prompt = f"React as a hype LoL caster to {diff} new kill(s)."
                 ai_text = get_ai_response(prompt, mode)
                 await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
-            # Clutch escape detection (big HP drop but survived)
+            # 💀 Clutch Escape
             damage_taken = previous_state["last_hp"] - hp
             if damage_taken > 300 and hp > 100:
                 if timestamp_now - previous_state["last_damage_timestamp"] > 20:
                     previous_state["last_damage_timestamp"] = timestamp_now
+                    print(f"[ESCAPE DETECTED] Damage taken: {damage_taken}, Survived with HP: {hp}")
                     mode = get_current_mode()
                     prompt = "Player just barely escaped a fight with low HP. React like a caster to this clutch escape!"
                     ai_text = get_ai_response(prompt, mode)
                     await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
-            # CS Milestone
-            if cs >= previous_state["cs"] + 30:
-                print(f"CS: {cs}, Last CS: {previous_state['cs']}")
+            # 💸 CS Milestone
+            milestone_cs = (cs // 30) * 30
+            if milestone_cs > previous_state.get("last_cs_milestone", 0):
+                previous_state["last_cs_milestone"] = milestone_cs
+                print(f"[CS MILESTONE] {milestone_cs} CS reached.")
                 mode = get_current_mode()
-                prompt = f"Player just crossed {cs} CS. React as a caster about their farming power."
+                prompt = f"Player just reached {milestone_cs} CS. React as a caster about their farming skills."
                 ai_text = get_ai_response(prompt, mode)
                 await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
-            # Update previous state
+            # ✅ Update previous state
             previous_state.update({
                 "kills": kills,
                 "deaths": deaths,
