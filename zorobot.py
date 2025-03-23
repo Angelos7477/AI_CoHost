@@ -14,9 +14,11 @@ import concurrent.futures
 from shutdown_hooks import setup_shutdown_hooks
 from obs_controller import OBSController, log_obs_event
 from overlay_ws_server import start_server as start_overlay_ws_server
-from overlay_push import push_askai_overlay, push_event_overlay
+from overlay_push import push_askai_overlay, push_event_overlay, push_commentary_overlay
 import requests
 import time
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -57,7 +59,7 @@ EVENTSUB_RESERVED_SLOTS = MAX_TTS_QUEUE_SIZE - ASKAI_TTS_RESERVED_LIMIT
 overlay_ws_task = None
 # 💡 Adjustable polling interval (every 3s)
 POLL_INTERVAL = 3
-LIVE_CLIENT_URL = "http://127.0.0.1:2999/liveclientdata/allgamedata"
+LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 # Basic state snapshot for change detection
 previous_state = {
     "kills": 0,
@@ -148,7 +150,7 @@ async def tts_worker():
     while True:
         item = await tts_queue.get()
         try:
-            if isinstance(item, tuple) and item[0] in ("askai", "event"):
+            if isinstance(item, tuple) and item[0] in ("askai", "event", "game"):
                 item_type = item[0]
                 if item_type == "askai":
                     _, user, question, answer = item
@@ -185,6 +187,16 @@ async def tts_worker():
                     except Exception as e:
                         log_error(f"[Overlay Push Event ERROR] {e}")
                     await speak_text(text)
+                elif item_type == "game":
+                    _, user, text = item
+                    chat_message = f"{user}, ZoroTheCaster says: {text}"
+                    if bot_instance:
+                        await bot_instance.send_to_chat(chat_message)
+                    try:
+                        await push_commentary_overlay(text)
+                    except Exception as e:
+                        log_error(f"[Overlay Push Game ERROR] {e}")
+                    await speak_text(text)
             else:
                 # Plain system message
                 await speak_text(item)
@@ -214,7 +226,7 @@ async def game_data_loop():
     print("🕹️ Game Data Monitor started.")
     while True:
         try:
-            response = requests.get(LIVE_CLIENT_URL, timeout=2)
+            response = requests.get(LIVE_CLIENT_URL, timeout=5, verify=False)
             if response.status_code != 200:
                 await asyncio.sleep(POLL_INTERVAL)
                 continue
@@ -229,11 +241,12 @@ async def game_data_loop():
             cs = scores.get("creepScore", 0)
             # Check for new kill
             if kills > previous_state["kills"]:
+                print(f"[KILL DETECTED] {previous_state['kills']} → {kills}")
                 diff = kills - previous_state["kills"]
                 mode = get_current_mode()
                 prompt = f"React as a hype LoL caster to {diff} new kill(s)."
                 ai_text = get_ai_response(prompt, mode)
-                await safe_add_to_tts_queue(ai_text)
+                await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
             # Clutch escape detection (big HP drop but survived)
             damage_taken = previous_state["last_hp"] - hp
             if damage_taken > 300 and hp > 100:
@@ -242,13 +255,14 @@ async def game_data_loop():
                     mode = get_current_mode()
                     prompt = "Player just barely escaped a fight with low HP. React like a caster to this clutch escape!"
                     ai_text = get_ai_response(prompt, mode)
-                    await safe_add_to_tts_queue(ai_text)
+                    await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
             # CS Milestone
             if cs >= previous_state["cs"] + 30:
+                print(f"CS: {cs}, Last CS: {previous_state['cs']}")
                 mode = get_current_mode()
                 prompt = f"Player just crossed {cs} CS. React as a caster about their farming power."
                 ai_text = get_ai_response(prompt, mode)
-                await safe_add_to_tts_queue(ai_text)
+                await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
             # Update previous state
             previous_state.update({
                 "kills": kills,
