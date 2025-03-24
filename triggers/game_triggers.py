@@ -1,6 +1,7 @@
 # triggers/game_triggers.py
 
 import time
+import random
 
 class GameTrigger:
     """Base class for all game triggers."""
@@ -59,4 +60,23 @@ class KillCountTrigger(GameTrigger):
             diff = kills - self.last_kills
             self.last_kills = kills
             return f"Player scored {diff} new kill(s)!"
+        return None
+
+class DeathTrigger(GameTrigger):
+    """Trigger when player dies (death count increases)."""
+    def __init__(self):
+        self.last_deaths = 0
+
+    def check(self, current_data, previous_data):
+        deaths = current_data.get("deaths", 0)
+        if deaths > self.last_deaths:
+            diff = deaths - self.last_deaths
+            self.last_deaths = deaths
+            messages = [
+                f"Oof... Player just died {diff} time(s).",
+                f"Another death on the board. That’s {deaths} now!",
+                f"Tough luck! Player went down again.",
+                f"The caster's getting worried — another death logged."
+            ]
+            return random.choice(messages)
         return None

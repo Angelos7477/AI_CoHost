@@ -19,7 +19,7 @@ import requests
 import time
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-from triggers.game_triggers import HPDropTrigger, CSMilestoneTrigger, KillCountTrigger
+from triggers.game_triggers import HPDropTrigger, CSMilestoneTrigger, KillCountTrigger, DeathTrigger
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -62,20 +62,16 @@ overlay_ws_task = None
 POLL_INTERVAL = 3
 LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 # Basic state snapshot for change detection
-previous_state = {
-    "kills": 0,
-    "deaths": 0,
-    "assists": 0,
-    "cs": 0,
-    "last_hp": 1000,
-    "last_damage_timestamp": 0,
-    "last_trigger_time": 0
-}
+previous_state = {}
 triggers = [
     HPDropTrigger(threshold_percent=25),
     CSMilestoneTrigger(step=30),
-    KillCountTrigger()
+    KillCountTrigger(),
+    DeathTrigger()
 ]
+# 🔥 TTS cooldown config
+GAME_TTS_COOLDOWN = 1  # seconds
+last_game_tts_time = 0  # global timestamp tracker
 
 
 # === Utility Functions ===
@@ -251,14 +247,25 @@ async def game_data_loop():
                 await asyncio.sleep(POLL_INTERVAL)
                 continue
             data = response.json()
-            player = data.get("activePlayer", {})
-            scores = player.get("scores", {})
-            hp = player.get("championStats", {}).get("currentHealth", 0)
-            timestamp_now = time.time()
+            # 🟦 Get your Riot ID from activePlayer
+            active_player = data.get("activePlayer", {})
+            riot_id = active_player.get("riotId", None)
+            # 🟦 Get your HP from activePlayer (HP is only here!)
+            hp = active_player.get("championStats", {}).get("currentHealth", 0)
+            # 🟦 Match your full player data in allPlayers[] by riotId
+            all_players = data.get("allPlayers", [])
+            your_player_data = next((p for p in all_players if p.get("riotId") == riot_id), None)
+            if not your_player_data:
+                print("[GameLoop] ⚠️ Could not find matching player in allPlayers.")
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
+            # ✅ Extract scores (kills, deaths, assists, cs)
+            scores = your_player_data.get("scores", {})
             kills = scores.get("kills", 0)
             deaths = scores.get("deaths", 0)
             assists = scores.get("assists", 0)
             cs = scores.get("creepScore", 0)
+            timestamp_now = time.time()
             # 🆕 Initialize state from current game snapshot
             if not previous_state.get("initialized"):
                 previous_state.update({
@@ -285,13 +292,19 @@ async def game_data_loop():
                 "assists": assists,
                 "timestamp": timestamp_now
             }
-            # ✅ Run all active triggers
+            # ✅ Collect all triggered messages
+            merged_results = []
             for trigger in triggers:
                 result = trigger.check(current_data, previous_state)
                 if result:
-                    mode = get_current_mode()
-                    ai_text = get_ai_response(result, mode)
-                    await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
+                    merged_results.append(result)
+            # ✅ If there are any events, and cooldown passed, send single merged AI prompt
+            if merged_results and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
+                combined_prompt = "\n".join(merged_results)
+                mode = get_current_mode()
+                ai_text = get_ai_response(combined_prompt, mode)
+                await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
+                last_game_tts_time = timestamp_now
             # ✅ Update previous state
             previous_state.update({
                 "kills": kills,
