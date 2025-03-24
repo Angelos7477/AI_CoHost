@@ -14,11 +14,12 @@ import concurrent.futures
 from shutdown_hooks import setup_shutdown_hooks
 from obs_controller import OBSController, log_obs_event
 from overlay_ws_server import start_server as start_overlay_ws_server
-from overlay_push import push_askai_overlay, push_event_overlay, push_commentary_overlay
+from overlay_push import push_askai_overlay, push_event_overlay, push_commentary_overlay, push_hide_overlay
 import requests
 import time
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from triggers.game_triggers import HPDropTrigger, CSMilestoneTrigger, KillCountTrigger
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -70,6 +71,11 @@ previous_state = {
     "last_damage_timestamp": 0,
     "last_trigger_time": 0
 }
+triggers = [
+    HPDropTrigger(threshold_percent=25),
+    CSMilestoneTrigger(step=30),
+    KillCountTrigger()
+]
 
 
 # === Utility Functions ===
@@ -168,8 +174,13 @@ async def tts_worker():
                     try:
                         await push_askai_overlay(question, answer)
                     except Exception as e:
-                        log_error(f"[Overlay Push AskAI ERROR] {e}")
+                        log_error(f"[Overlay Push AskAI ERROR] {e}"),
                     await speak_text(answer)
+                    # NEW: Send hide event to WebSocket
+                    try:
+                        await push_hide_overlay("askai")
+                    except Exception as e:
+                        log_error(f"[Overlay AskAI Hide ERROR] {e}")
                 elif item_type == "event":
                     _, user, text = item
                     chat_message = f"{user}, ZoroTheCaster says: {text}"
@@ -187,6 +198,10 @@ async def tts_worker():
                     except Exception as e:
                         log_error(f"[Overlay Push Event ERROR] {e}")
                     await speak_text(text)
+                    try:
+                        await push_hide_overlay("event")
+                    except Exception as e:
+                        log_error(f"[Overlay Event Hide ERROR] {e}")
                 elif item_type == "game":
                     _, user, text = item
                     chat_message = f"{user}, ZoroTheCaster says: {text}"
@@ -197,6 +212,10 @@ async def tts_worker():
                     except Exception as e:
                         log_error(f"[Overlay Push Game ERROR] {e}")
                     await speak_text(text)
+                    try:
+                        await push_hide_overlay("commentary")
+                    except Exception as e:
+                        log_error(f"[Overlay Commentary Hide ERROR] {e}")
             else:
                 # Plain system message
                 await speak_text(item)
@@ -257,33 +276,22 @@ async def game_data_loop():
                 await asyncio.sleep(POLL_INTERVAL)
                 continue
             print(f"[GameLoop] K/D/A: {kills}/{deaths}/{assists}, CS: {cs}, HP: {hp}")
-            # 🔥 Kills
-            if kills > previous_state["kills"]:
-                diff = kills - previous_state["kills"]
-                print(f"[KILL DETECTED] {previous_state['kills']} → {kills}")
-                mode = get_current_mode()
-                prompt = f"React as a hype LoL caster to {diff} new kill(s)."
-                ai_text = get_ai_response(prompt, mode)
-                await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
-            # 💀 Clutch Escape
-            damage_taken = previous_state["last_hp"] - hp
-            if damage_taken > 300 and hp > 100:
-                if timestamp_now - previous_state["last_damage_timestamp"] > 20:
-                    previous_state["last_damage_timestamp"] = timestamp_now
-                    print(f"[ESCAPE DETECTED] Damage taken: {damage_taken}, Survived with HP: {hp}")
+            # ✅ Build current_data dict to pass into triggers
+            current_data = {
+                "hp": hp,
+                "cs": cs,
+                "kills": kills,
+                "deaths": deaths,
+                "assists": assists,
+                "timestamp": timestamp_now
+            }
+            # ✅ Run all active triggers
+            for trigger in triggers:
+                result = trigger.check(current_data, previous_state)
+                if result:
                     mode = get_current_mode()
-                    prompt = "Player just barely escaped a fight with low HP. React like a caster to this clutch escape!"
-                    ai_text = get_ai_response(prompt, mode)
+                    ai_text = get_ai_response(result, mode)
                     await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
-            # 💸 CS Milestone
-            milestone_cs = (cs // 30) * 30
-            if milestone_cs > previous_state.get("last_cs_milestone", 0):
-                previous_state["last_cs_milestone"] = milestone_cs
-                print(f"[CS MILESTONE] {milestone_cs} CS reached.")
-                mode = get_current_mode()
-                prompt = f"Player just reached {milestone_cs} CS. React as a caster about their farming skills."
-                ai_text = get_ai_response(prompt, mode)
-                await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
             # ✅ Update previous state
             previous_state.update({
                 "kills": kills,

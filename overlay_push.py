@@ -30,3 +30,9 @@ async def push_commentary_overlay(text: str):
         "type": "commentary",
         "text": text
     })
+
+async def push_hide_overlay(source_type: str):
+    """Send hide signal to any overlay type (askai, event, commentary)."""
+    await broadcast({
+        "type": f"{source_type}_hide"
+    })
