@@ -20,6 +20,9 @@ import time
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from triggers.game_triggers import HPDropTrigger, CSMilestoneTrigger, KillCountTrigger, DeathTrigger, GoldThresholdTrigger, FirstBloodTrigger, DragonKillTrigger
+from elevenlabs.client import ElevenLabs
+from elevenlabs import play, VoiceSettings
+
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -32,18 +35,21 @@ CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
 USER_TOKEN = os.getenv("TWITCH_USER_TOKEN")
 USER_REFRESH_TOKEN = os.getenv("TWITCH_REFRESH_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
+eleven = ElevenLabs(api_key=os.getenv("ELEVEN_API_KEY"))
 # === OpenAI Setup ===
 client = OpenAI(api_key=OPENAI_API_KEY)
 RIOT_API_KEY = os.getenv("RIOT_API_KEY") 
 
 # === Global Configs ===
 VALID_MODES = ["hype", "coach", "sarcastic", "wholesome"]
+# 🧠 Choose model and voice ID
+ELEVEN_MODEL = "eleven_turbo_v2_5"
+ELEVEN_VOICE_ID = "flHkNRp1BlvT73UL6gyz"  # Replace this with the actual ID
 vote_counts = defaultdict(int)
 tts_lock = asyncio.Lock()
 tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 tts_queue = asyncio.Queue()
-ASKAI_COOLDOWN_SECONDS = 60
+ASKAI_COOLDOWN_SECONDS = 2
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
 VOTING_DURATION = 300
@@ -168,10 +174,19 @@ def get_event_reaction(event_type, user):
     return get_ai_response(base_prompt, get_current_mode())
 
 def speak_sync(text):
-    engine = pyttsx3.init()
-    engine.setProperty('rate', 160)
-    engine.say(text)
-    engine.runAndWait()
+    try:
+        audio = eleven.generate(
+            text=text,
+            voice=ELEVEN_VOICE_ID,
+            model=ELEVEN_MODEL,
+            voice_settings=VoiceSettings(stability=0.5, similarity_boost=0.8))
+        play(audio)
+    except Exception as e:
+        log_error(f"[TTS FALLBACK] ElevenLabs failed, falling back to pyttsx3. Reason: {e}")
+        engine = pyttsx3.init()
+        engine.setProperty('rate', 160)
+        engine.say(text)
+        engine.runAndWait()
 
 async def speak_text(text):
     loop = asyncio.get_running_loop()
@@ -187,6 +202,7 @@ async def tts_worker():
                     _, user, question, answer = item
                     chat_message = f"{user}, ZoroTheCaster says: {answer}"
                     if bot_instance:
+                        await asyncio.sleep(1)
                         await bot_instance.send_to_chat(chat_message)
                     # ✅ Delegate everything to the unified overlay method
                     if hasattr(bot_instance, "obs_controller"):
@@ -197,6 +213,7 @@ async def tts_worker():
                             log_error(f"[OBS AskAI Update Error] {e}")
                     # ✅ Push to Overlay WebSocket!
                     try:
+                        await asyncio.sleep(1)
                         await push_askai_overlay(question, answer)
                     except Exception as e:
                         log_error(f"[Overlay Push AskAI ERROR] {e}"),
@@ -210,6 +227,7 @@ async def tts_worker():
                     _, user, text = item
                     chat_message = f"{user}, ZoroTheCaster says: {text}"
                     if bot_instance:
+                        await asyncio.sleep(1)
                         await bot_instance.send_to_chat(chat_message)
                     if hasattr(bot_instance, "obs_controller"):
                         try:
@@ -219,6 +237,7 @@ async def tts_worker():
                             log_error(f"[OBS Event Overlay Update Error] {e}")
                     # ✅ Push to Overlay WebSocket!
                     try:
+                        await asyncio.sleep(1)
                         await push_event_overlay(text)
                     except Exception as e:
                         log_error(f"[Overlay Push Event ERROR] {e}")
@@ -231,8 +250,10 @@ async def tts_worker():
                     _, user, text = item
                     chat_message = f"{user}, ZoroTheCaster says: {text}"
                     if bot_instance:
+                        await asyncio.sleep(1)
                         await bot_instance.send_to_chat(chat_message)
                     try:
+                        await asyncio.sleep(1)
                         await push_commentary_overlay(text)
                     except Exception as e:
                         log_error(f"[Overlay Push Game ERROR] {e}")
