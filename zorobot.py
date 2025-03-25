@@ -14,12 +14,12 @@ import concurrent.futures
 from shutdown_hooks import setup_shutdown_hooks
 from obs_controller import OBSController, log_obs_event
 from overlay_ws_server import start_server as start_overlay_ws_server
-from overlay_push import push_askai_overlay, push_event_overlay, push_commentary_overlay, push_hide_overlay
+from overlay_push import push_askai_overlay,push_event_overlay,push_commentary_overlay,push_hide_overlay,push_askai_cooldown_notice,push_cost_overlay,push_cost_increment
 import requests
 import time
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-from triggers.game_triggers import HPDropTrigger, CSMilestoneTrigger, KillCountTrigger, DeathTrigger
+from triggers.game_triggers import HPDropTrigger, CSMilestoneTrigger, KillCountTrigger, DeathTrigger, GoldThresholdTrigger, FirstBloodTrigger, DragonKillTrigger
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -43,7 +43,7 @@ vote_counts = defaultdict(int)
 tts_lock = asyncio.Lock()
 tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 tts_queue = asyncio.Queue()
-ASKAI_COOLDOWN_SECONDS = 1
+ASKAI_COOLDOWN_SECONDS = 60
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
 VOTING_DURATION = 300
@@ -64,15 +64,18 @@ LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 # Basic state snapshot for change detection
 previous_state = {}
 triggers = [
-    HPDropTrigger(threshold_percent=25),
-    CSMilestoneTrigger(step=30),
+    HPDropTrigger(threshold_percent=35),
+    CSMilestoneTrigger(step=70),
     KillCountTrigger(),
-    DeathTrigger()
+    DeathTrigger(),
+    GoldThresholdTrigger(cooldown=180),  # ⏱️ 3-minute cooldown
+    FirstBloodTrigger(),       # 🩸
+    DragonKillTrigger()        # 🐉
 ]
 # 🔥 TTS cooldown config
 GAME_TTS_COOLDOWN = 1  # seconds
 last_game_tts_time = 0  # global timestamp tracker
-
+AUTO_RECAP_INTERVAL = 360  # every 6 minutes
 
 # === Utility Functions ===
 def debug_imports():
@@ -125,7 +128,33 @@ def get_ai_response(prompt, mode):
         max_tokens=100,
         temperature=0.7
     )
+    # Log token usage & estimate cost
+    usage = response.usage
+    total_tokens = usage.total_tokens
+    prompt_tokens = usage.prompt_tokens
+    completion_tokens = usage.completion_tokens
+    model = response.model
+    # 💰 Cost estimation
+    cost = estimate_cost(model, prompt_tokens, completion_tokens)
+    log_event(f"[OpenAI] Model={model}, Prompt={prompt_tokens}, Completion={completion_tokens}, "
+              f"Total={total_tokens}, Cost=${cost:.5f}")
+    # ✅ Schedule overlay update (cost only)
+    try:
+        asyncio.create_task(push_cost_increment(cost))  # We’ll define this
+    except Exception as e:
+        log_error(f"[Overlay Cost Push ERROR] {e}")
     return response.choices[0].message.content
+
+def estimate_cost(model, prompt_tokens, completion_tokens):
+    # Source: https://openai.com/pricing
+    if model.startswith("gpt-3.5-turbo"):
+        return (prompt_tokens + completion_tokens) / 1000 * 0.001  # $0.001 / 1K
+    elif model == "gpt-4":
+        return (prompt_tokens / 1000 * 0.03) + (completion_tokens / 1000 * 0.06)
+    elif model == "gpt-4o":
+        return (prompt_tokens + completion_tokens) / 1000 * 0.005  # $0.005 / 1K
+    else:
+        return 0.0  # Unknown model
 
 def get_event_reaction(event_type, user):
     base_prompt = {
@@ -235,9 +264,86 @@ def log_error(error_text: str):
     timestamp = datetime.now(timezone.utc).isoformat()
     with open("logs/errors.log", "a", encoding="utf-8") as error_file:
         error_file.write(f"[{timestamp}] {error_text}\n")
+def log_event(text: str):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with open("logs/openai_usage.log", "a", encoding="utf-8") as log_file:
+        log_file.write(f"[{timestamp}] {text}\n")
 
+
+def generate_game_recap(all_data, you, active_player, last_snapshot=None, dragon_kills=None):
+    your_name = you.get("summonerName", "You")
+    scores = you.get("scores", {})
+    gold = active_player.get("currentGold", 0)
+    team = you.get("team", "ORDER")
+    all_players = all_data.get("allPlayers", [])
+    item_gold = sum(item.get("price", 0) * item.get("count", 1) for item in you.get("items", []))
+    your_team = [p for p in all_players if p.get("team") == team]
+    enemy_team = [p for p in all_players if p.get("team") != team]
+    # Team kills
+    your_team_kills = sum(p.get("scores", {}).get("kills", 0) for p in your_team)
+    enemy_team_kills = sum(p.get("scores", {}).get("kills", 0) for p in enemy_team)
+    # Team gold
+    teams_gold = estimate_team_gold(all_players)
+    your_team_gold = teams_gold.get(team, 0)
+    enemy_team_gold = sum(v for k, v in teams_gold.items() if k != team)
+    gold_diff = your_team_gold - enemy_team_gold
+    status = "ahead" if gold_diff > 0 else "behind"
+    # Recap changes
+    recap_lines = []
+    if last_snapshot:
+        delta_kills = scores.get("kills", 0) - last_snapshot.get("kills", 0)
+        delta_deaths = scores.get("deaths", 0) - last_snapshot.get("deaths", 0)
+        delta_assists = scores.get("assists", 0) - last_snapshot.get("assists", 0)
+        delta_cs = scores.get("creepScore", 0) - last_snapshot.get("cs", 0)
+        if delta_kills > 0:
+            recap_lines.append(f"⚔️ You scored {delta_kills} kill(s)")
+        if delta_deaths > 0:
+            recap_lines.append(f"💀 You died {delta_deaths} time(s)")
+        if delta_assists > 0:
+            recap_lines.append(f"🧩 You assisted {delta_assists} time(s)")
+        if delta_cs > 0:
+            current_time = time.time()
+            prev_time = last_snapshot.get("timestamp", current_time)
+            delta_time = current_time - prev_time
+            if delta_time >= 30:  # only calculate if > 30 seconds passed
+                cs_per_min = delta_cs / (delta_time / 60)
+                recap_lines.append(f"🐸 You farmed {delta_cs} CS ({cs_per_min:.1f}/min)")
+            else:
+                recap_lines.append(f"🐸 You farmed {delta_cs} CS")
+        # Optional: detect item changes
+        prev_items = {item["displayName"] for item in last_snapshot.get("items", [])}
+        curr_items = {item["displayName"] for item in you.get("items", [])}
+        new_items = curr_items - prev_items
+        if new_items:
+            item_list = ", ".join(new_items)
+            recap_lines.append(f"🛒 New items: {item_list}")
+    # ✅ New: dragon check
+        prev_dragons = last_snapshot.get("dragon_kills", {}).get(team, 0)
+        curr_dragons = dragon_kills.get(team, 0)
+        if curr_dragons > prev_dragons:
+            recap_lines.append(f"🔥 Your team secured {curr_dragons - prev_dragons} dragon(s)!")
+    else:
+        recap_lines.append("📡 First recap of the match.")
+    summary = (
+        f"{your_name} is now {scores.get('kills', 0)}/{scores.get('deaths', 0)}/"
+        f"{scores.get('assists', 0)} with {scores.get('creepScore', 0)} CS and "
+        f"{gold:.0f} gold. You've spent {item_gold:,} gold on items. "
+        f"Your team has {your_team_kills} kills vs {enemy_team_kills}. "
+        f"You're {status} by {abs(gold_diff):,} gold in items."
+    )
+    return "Since the last update:\n" + "\n".join(recap_lines) + "\n" + summary
+
+def estimate_team_gold(players):
+    team_gold = {}
+    for player in players:
+        team = player.get("team", "UNKNOWN")
+        items = player.get("items", [])
+        item_gold = sum(item.get("price", 0) * item.get("count", 1) for item in items)
+        team_gold[team] = team_gold.get(team, 0) + item_gold
+    return team_gold
 
 async def game_data_loop():
+    global last_game_tts_time  # 🔥 Add this line!
     print("🕹️ Game Data Monitor started.")
     initialized = False
     while True:
@@ -250,8 +356,11 @@ async def game_data_loop():
             # 🟦 Get your Riot ID from activePlayer
             active_player = data.get("activePlayer", {})
             riot_id = active_player.get("riotId", None)
+            events = data.get("events", {}).get("Events", [])
+            dragon_kill_events = [e for e in events if e.get("EventName") == "DragonKill"]
             # 🟦 Get your HP from activePlayer (HP is only here!)
             hp = active_player.get("championStats", {}).get("currentHealth", 0)
+            current_gold = active_player.get("currentGold", 0)
             # 🟦 Match your full player data in allPlayers[] by riotId
             all_players = data.get("allPlayers", [])
             your_player_data = next((p for p in all_players if p.get("riotId") == riot_id), None)
@@ -265,7 +374,18 @@ async def game_data_loop():
             deaths = scores.get("deaths", 0)
             assists = scores.get("assists", 0)
             cs = scores.get("creepScore", 0)
+            item_gold = sum(item.get("price", 0) * item.get("count", 1) for item in your_player_data.get("items", []))
+            your_team = your_player_data.get("team", "ORDER")
+            total_kills = sum(p.get("scores", {}).get("kills", 0) for p in all_players)
+            dragon_kills = {"ORDER": 0, "CHAOS": 0}
+            for e in dragon_kill_events:
+                killer = e.get("KillerName", "")
+                killer_player = next((p for p in all_players if p.get("summonerName") == killer), None)
+                if killer_player:
+                    team = killer_player.get("team", "UNKNOWN")
+                    dragon_kills[team] += 1
             timestamp_now = time.time()
+            game_time_seconds = data.get("gameData", {}).get("gameTime", 0)
             # 🆕 Initialize state from current game snapshot
             if not previous_state.get("initialized"):
                 previous_state.update({
@@ -274,23 +394,34 @@ async def game_data_loop():
                     "assists": assists,
                     "cs": cs,
                     "last_hp": hp,
+                    "gold": current_gold,  # ✅ add this
+                    "item_gold": item_gold,  # ✅ Add this
                     "last_damage_timestamp": timestamp_now,
                     "last_trigger_time": timestamp_now,
-                    "last_cs_milestone": (cs // 30) * 30,
+                    "last_cs_milestone": (cs // 70) * 70,
+                    "total_kills": total_kills,
+                    "your_team": your_team,
+                    "dragon_kills": dragon_kills,
                     "initialized": True
                 })
                 print("📡 Initialized game_data_loop with current stats.")
                 await asyncio.sleep(POLL_INTERVAL)
                 continue
             print(f"[GameLoop] K/D/A: {kills}/{deaths}/{assists}, CS: {cs}, HP: {hp}")
+            print(f"[DEBUG] dragon_kills: {dragon_kills}")
             # ✅ Build current_data dict to pass into triggers
             current_data = {
                 "hp": hp,
                 "cs": cs,
                 "kills": kills,
                 "deaths": deaths,
+                "gold": current_gold,  # ✅ add this
+                "item_gold": item_gold,  # ✅ Add this
                 "assists": assists,
-                "timestamp": timestamp_now
+                "timestamp": timestamp_now,
+                "total_kills": total_kills,
+                "your_team": your_team,
+                "dragon_kills": dragon_kills
             }
             # ✅ Collect all triggered messages
             merged_results = []
@@ -305,13 +436,46 @@ async def game_data_loop():
                 ai_text = get_ai_response(combined_prompt, mode)
                 await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
                 last_game_tts_time = timestamp_now
+            # ✅ Auto recap every X seconds (e.g. 180s)
+            if (timestamp_now - previous_state.get("last_recap_time", 0)) >= AUTO_RECAP_INTERVAL:
+                    # 🛑 Skip recap if we're too early in the game
+                if game_time_seconds < 300:
+                    print("⏳ Skipping early-game recap (still in spawn phase).")
+                    await asyncio.sleep(POLL_INTERVAL)
+                    continue
+                last_snapshot = previous_state.get("last_recap_snapshot")
+                if not last_snapshot:
+                    last_snapshot = previous_state.copy()
+                recap_text = generate_game_recap(data, your_player_data, active_player, last_snapshot, dragon_kills)
+                if recap_text:
+                    ai_text = get_ai_response(recap_text, get_current_mode())
+                    await safe_add_to_tts_queue(("game", "GameRecap", ai_text))
+                    previous_state["last_recap_time"] = timestamp_now
+                    previous_state["last_recap_snapshot"] = {
+                        "kills": kills,
+                        "deaths": deaths,
+                        "assists": assists,
+                        "cs": cs,
+                        "items": your_player_data.get("items", []),
+                        "total_kills": total_kills,
+                        "your_team": your_team,
+                        "dragon_kills": dragon_kills,
+                        "gold": current_gold,  # ✅ add this
+                        "item_gold": item_gold,  # ✅ Add this
+                        "timestamp": timestamp_now
+                    }
             # ✅ Update previous state
             previous_state.update({
                 "kills": kills,
                 "deaths": deaths,
                 "assists": assists,
                 "cs": cs,
-                "last_hp": hp
+                "last_hp": hp,
+                "total_kills": total_kills,
+                "your_team": your_team,
+                "dragon_kills": dragon_kills,
+                "gold": current_gold,  # ✅ add this
+                "item_gold": item_gold  # ✅ Add this
             })
         except Exception as e:
             print(f"[GameMonitor Error]: {e}")
@@ -354,6 +518,7 @@ class ZoroTheCasterBot(commands.Bot):
         print(f"✅ Logged in as {self.nick}")
         print(f"📡 Connected to #{CHANNEL}")
         self.loop.create_task(self.personality_voting_timer())
+        self.loop.create_task(self.periodic_commands_reminder())
         self.loop.create_task(self.process_askai_queue())
         #self.loop.create_task(start_commentator_mode(60))
         self.loop.create_task(tts_worker())
@@ -634,7 +799,14 @@ class ZoroTheCasterBot(commands.Bot):
         last_used = askai_cooldowns.get(user)
         if last_used and (now - last_used).total_seconds() < ASKAI_COOLDOWN_SECONDS:
             remaining = ASKAI_COOLDOWN_SECONDS - int((now - last_used).total_seconds())
-            await ctx.send(f"⏳ {user}, wait {remaining}s before using !askai again.")
+            # ✅ Show only on overlay (not chat)
+            overlay_text = f"{user}, wait {remaining}s before using !askai again!"
+            print(f"[ASKAI BLOCKED] {overlay_text}")  # Optional: Log it silently
+            try:
+                cooldown_msg = f"wait {remaining}s before using !askai again."
+                await push_askai_cooldown_notice(user, cooldown_msg)
+            except Exception as e:
+                log_error(f"[Overlay Cooldown Notice ERROR] {e}")
             return
         if not (ctx.author.is_subscriber or ctx.author.is_mod or ctx.author.is_broadcaster):
             await ctx.send(f"❌ {user}, only subscribers, mods, or the streamer can use !askai.")
@@ -688,21 +860,43 @@ class ZoroTheCasterBot(commands.Bot):
             print(f"❌ Chat send error: {e}")
 
     async def personality_voting_timer(self):
+        previous_mode = get_current_mode()
         while True:
             await asyncio.sleep(VOTING_DURATION)
             if vote_counts:
                 most_voted = Counter(vote_counts).most_common(1)[0]
-                mode, count = most_voted
+                new_mode, count = most_voted
                 with open("current_mode.txt", "w") as f:
-                    f.write(mode)
+                    f.write(new_mode)
                 await self.connected_channels[0].send(
-                    f"✨ Voting closed! Winning AI personality: **{mode.upper()}** with {count} votes!")
-                await safe_add_to_tts_queue(f"The new AI personality is {mode} mode.")
+                    f"✨ Voting closed! Winning AI personality: **{new_mode.upper()}** with {count} votes!")
+                # ✅ Only announce if mode actually changed
+                if new_mode != previous_mode:
+                    await safe_add_to_tts_queue(f"The new AI personality is {new_mode} mode.")
+                    previous_mode = new_mode  # Update tracking
+                else:
+                    await self.connected_channels[0].send(
+                        f"🟰 Personality remains in {new_mode.upper()} mode.")
             else:
                 await self.connected_channels[0].send("🕓 Voting ended, no votes were cast.")
                 await safe_add_to_tts_queue("The voting period ended with no votes.")
             vote_counts.clear()
             await self.connected_channels[0].send("🔄 Votes have been reset. Start voting again!")
+
+    async def periodic_commands_reminder(self, interval=600):  # 600 sec = 10 minutes
+        await self.wait_until_ready()
+        while True:
+            try:
+                if self.connected_channels:
+                    commands_text = (
+                        "🤖 Commands: "
+                        "🗳 `!vote` | 📊 `!results` | 🧠 `!askai` | ⏱ `!cooldown` | 📬 `!queue` | 📈 `!status` | 📄 `!commands` "
+                    )
+                    await self.connected_channels[0].send(commands_text)
+            except Exception as e:
+                log_error(f"[Periodic Commands Reminder ERROR] {e}")
+            await asyncio.sleep(interval)
+
 
 # === Run the Bot ===
 if __name__ == "__main__":

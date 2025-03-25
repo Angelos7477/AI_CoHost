@@ -24,6 +24,31 @@
       box-shadow: 0 0 20px rgba(20, 20, 20, 0.60);
     }
 
+    #cooldown-overlay {
+      /*display: none; /* ✅ Start hidden */
+      position: absolute;
+      top: 1%;
+      left: 10px;
+      padding: 6px 12px;
+      font-size: 12px;
+      background: rgba(0, 0, 0, 0.6);
+      border-radius: 8px;
+      max-width: 40%;
+      white-space: pre-wrap;
+      z-index: 999;
+      box-shadow: 0 0 10px rgba(0,0,0,0.3);
+    }
+    #cost-overlay {
+      /*display: none; /* ✅ Start hidden */
+      position: absolute;
+      top: 1%;
+      right: 15%;
+      font-size: 12px;
+      background: rgba(20, 20, 20, 0.4);
+      padding: 8px 12px;
+      border-radius: 10px;
+    }
+
     #askai-overlay {
       bottom: 10%;
       left: 28%;
@@ -46,11 +71,14 @@
   <div id="askai-overlay">❓ Waiting for AskAI...</div>
   <div id="commentary-overlay">🎙️ Waiting for Commentary...</div>
   <div id="event-overlay">🎉 Waiting for Events...</div>
+  <div id="cooldown-overlay">⏳ Cooldown...</div>
+  <div id="cost-overlay">💰 Cost: $0.00000</div>
 
   <script>
     const askaiDiv = document.getElementById("askai-overlay");
     const commentaryDiv = document.getElementById("commentary-overlay");
     const eventDiv = document.getElementById("event-overlay");
+    const costDiv = document.getElementById("cost-overlay");
 
     let ws = null;
     let reconnectTimeout = null;
@@ -84,8 +112,19 @@
           askaiDiv.style.display = "none"; // Hide AskAI
         } else if (data.type === "commentary_hide") {
           commentaryDiv.style.display = "none"; // Hide Commentary
+        } else if (data.type === "cooldown") {
+          const cooldownDiv = document.getElementById("cooldown-overlay");
+          cooldownDiv.textContent = `⏳ ${data.message}`;
+          cooldownDiv.style.display = "block";
+        } else if (data.type === "cooldown_hide") {
+          const cooldownDiv = document.getElementById("cooldown-overlay");
+          cooldownDiv.style.display = "none";
         } else if (data.type === "event_hide") {
           eventDiv.style.display = "none"; // Hide Event
+        } else if (data.type === "cost") {
+          const costDiv = document.getElementById("cost-overlay");
+          costDiv.textContent = `💰 Total API Cost: $${parseFloat(data.amount).toFixed(4)}`;
+          costDiv.style.display = "block";
         } else if (data.type === "mood") {
           // Optional: use this to change a header or apply a style
           console.log("🔄 Mood update:", data.text);

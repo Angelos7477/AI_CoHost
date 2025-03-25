@@ -11,7 +11,7 @@ class GameTrigger:
 
 class HPDropTrigger(GameTrigger):
     """Trigger when HP drops by a certain percentage in one loop."""
-    def __init__(self, threshold_percent=25, cooldown=20):
+    def __init__(self, threshold_percent=35, cooldown=20):
         self.threshold = threshold_percent
         self.cooldown = cooldown
         self.last_trigger_time = 0
@@ -36,7 +36,7 @@ class HPDropTrigger(GameTrigger):
 
 class CSMilestoneTrigger(GameTrigger):
     """Trigger when a new CS milestone is reached (30, 60, etc)."""
-    def __init__(self, step=30):
+    def __init__(self, step=70):
         self.step = step
         self.last_milestone = 0
 
@@ -79,4 +79,46 @@ class DeathTrigger(GameTrigger):
                 f"The caster's getting worried — another death logged."
             ]
             return random.choice(messages)
+        return None
+
+class GoldThresholdTrigger:
+    def __init__(self, cooldown=180):  # default 3 minutes
+        self.cooldown = cooldown
+        self.last_triggered = 0  # store timestamp of last trigger
+    def check(self, current, previous):
+        gold = current.get("gold", 0)
+        now = current.get("timestamp", time.time())
+        if gold >= 2500 and previous.get("gold", 0) < 2500:
+            if (now - self.last_triggered) >= self.cooldown:
+                self.last_triggered = now
+                return "You have over 2.5k gold! Time to consider recalling and spending it."
+        return None
+
+class FirstBloodTrigger:
+    def __init__(self):
+        self.triggered = False
+
+    def check(self, current, previous):
+        if self.triggered:
+            return None
+        # First blood = when total kills go from 0 to 1
+        total_kills_before = previous.get("total_kills", 0)
+        total_kills_now = current.get("total_kills", 0)
+        if total_kills_before == 0 and total_kills_now > 0:
+            self.triggered = True
+            return "🩸 First blood has been drawn! The fight begins!"
+        return None
+
+class DragonKillTrigger:
+    def __init__(self):
+        self.last_dragon_kills = {"ORDER": 0, "CHAOS": 0}
+    def check(self, current, previous):
+        team_dragon_kills = current.get("dragon_kills", {})
+        for team, count in team_dragon_kills.items():
+            if count > self.last_dragon_kills.get(team, 0):
+                self.last_dragon_kills[team] = count
+                if team == current.get("your_team"):
+                    return "🐉 Your team has slain a dragon!"
+                else:
+                    return "⚠️ The enemy team has taken a dragon!"
         return None
