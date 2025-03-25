@@ -10,27 +10,27 @@ class GameTrigger:
 
 
 class HPDropTrigger(GameTrigger):
-    """Trigger when HP drops by a certain percentage in one loop."""
-    def __init__(self, threshold_percent=35, cooldown=20):
+    """Trigger when HP drops by a certain percentage AND is under a critical HP value."""
+    def __init__(self, threshold_percent=35, min_current_hp=70, cooldown=30):
         self.threshold = threshold_percent
+        self.min_current_hp = min_current_hp
         self.cooldown = cooldown
         self.last_trigger_time = 0
-
     def check(self, current_data, previous_data):
         now = time.time()
         if now - self.last_trigger_time < self.cooldown:
             return None
-
         prev_hp = previous_data.get("last_hp", 0)
         curr_hp = current_data.get("hp", 0)
-
         if prev_hp <= 0 or curr_hp <= 0:
             return None
-
+        # ✅ Only trigger if current HP is below min threshold
+        if curr_hp > self.min_current_hp:
+            return None
         drop = ((prev_hp - curr_hp) / max(prev_hp, 1)) * 100
         if drop >= self.threshold:
             self.last_trigger_time = now
-            return f"Player just took a big hit! Lost {int(drop)}% HP."
+            return f"🩸 Player took a big hit! Lost {int(drop)}% and is now critically low at {curr_hp} HP."
         return None
 
 

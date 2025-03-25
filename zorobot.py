@@ -64,7 +64,7 @@ LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 # Basic state snapshot for change detection
 previous_state = {}
 triggers = [
-    HPDropTrigger(threshold_percent=35),
+    HPDropTrigger(threshold_percent=35, min_current_hp=70, cooldown=30),
     CSMilestoneTrigger(step=70),
     KillCountTrigger(),
     DeathTrigger(),
@@ -158,12 +158,12 @@ def estimate_cost(model, prompt_tokens, completion_tokens):
 
 def get_event_reaction(event_type, user):
     base_prompt = {
-        "sub": f"{user} just subscribed! React as a hype League of Legends commentator.",
-        "resub": f"{user} just resubscribed! Celebrate it like a shoutcaster.",
-        "raid": f"A raid is happening! {user} brought their viewers! React dramatically.",
-        "cheer": f"{user} just sent some bits! React with high energy and excitement.",
-        "gift": f"{user} just gifted a sub! Celebrate like a caster going wild during a pentakill.",
-        "giftmass": f"{user} started a mass gift sub train! React like the arena is exploding with hype.",
+        "sub": f"{user} just subscribed! React with high-energy shoutcaster hype.",
+        "resub": f"{user} resubbed! Hype it up like a dramatic League of Legends caster.",
+        "raid": f"A raid is happening! {user} brought their viewers! React with explosive hype.",
+        "cheer": f"{user} just sent bits! React like a caster pumped on adrenaline.",
+        "gift": f"{user} gifted a sub! React like it’s a game-winning teamfight.",
+        "giftmass": f"{user} just launched a gift sub train! React like the Nexus is exploding!",
     }.get(event_type, f"{user} triggered an unknown event. React accordingly.")
     return get_ai_response(base_prompt, get_current_mode())
 
@@ -879,12 +879,10 @@ class ZoroTheCasterBot(commands.Bot):
                         f"🟰 Personality remains in {new_mode.upper()} mode.")
             else:
                 await self.connected_channels[0].send("🕓 Voting ended, no votes were cast.")
-                await safe_add_to_tts_queue("The voting period ended with no votes.")
             vote_counts.clear()
             await self.connected_channels[0].send("🔄 Votes have been reset. Start voting again!")
 
     async def periodic_commands_reminder(self, interval=600):  # 600 sec = 10 minutes
-        await self.wait_until_ready()
         while True:
             try:
                 if self.connected_channels:
