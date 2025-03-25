@@ -44,7 +44,7 @@ RIOT_API_KEY = os.getenv("RIOT_API_KEY")
 VALID_MODES = ["hype", "coach", "sarcastic", "wholesome"]
 # 🧠 Choose model and voice ID
 ELEVEN_MODEL = "eleven_turbo_v2_5"
-ELEVEN_VOICE_ID = "flHkNRp1BlvT73UL6gyz"  # Replace this with the actual ID
+ELEVEN_VOICE_ID = "KLZOWyG48RjZkAAjuM89"  # Replace this with the actual ID
 vote_counts = defaultdict(int)
 tts_lock = asyncio.Lock()
 tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -126,7 +126,7 @@ def load_system_prompt(mode):
 def get_ai_response(prompt, mode):
     system_prompt = load_system_prompt(mode)
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",  #gpt-4o , gpt-3.5-turbo
+        model="gpt-4o",  #gpt-4o , gpt-3.5-turbo
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
