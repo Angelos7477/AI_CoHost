@@ -53,7 +53,7 @@ tts_queue = asyncio.Queue()
 ASKAI_COOLDOWN_SECONDS = 60
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
-VOTING_DURATION = 300
+VOTING_DURATION = 600
 askai_cooldowns = {}
 askai_queue = asyncio.Queue()
 commentator_paused = False  # New flag
@@ -66,7 +66,7 @@ ASKAI_TTS_RESERVED_LIMIT = 7  # Maximum messages askai is allowed to use in TTS 
 EVENTSUB_RESERVED_SLOTS = MAX_TTS_QUEUE_SIZE - ASKAI_TTS_RESERVED_LIMIT
 overlay_ws_task = None
 # 💡 Adjustable polling interval (every 8s)
-POLL_INTERVAL = 8
+POLL_INTERVAL = 5
 LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 # Basic state snapshot for change detection
 previous_state = {}
@@ -75,12 +75,12 @@ triggers = [
     #CSMilestoneTrigger(step=70),
     KillCountTrigger(),
     DeathTrigger(),
-    GoldThresholdTrigger(cooldown=240),  # ⏱️ 3-minute cooldown
+    GoldThresholdTrigger(cooldown=240),  # ⏱️ 4-minute cooldown
     FirstBloodTrigger(),       # 🩸
     DragonKillTrigger()        # 🐉
 ]
 # 🔥 TTS cooldown config
-GAME_TTS_COOLDOWN = 7  # seconds
+GAME_TTS_COOLDOWN = 4  # seconds
 last_game_tts_time = 0  # global timestamp tracker
 AUTO_RECAP_INTERVAL = 600  # every 10 minutes
 
@@ -132,8 +132,10 @@ def get_ai_response(prompt, mode):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
         ],
-        max_tokens=100,
-        temperature=0.7
+        max_tokens=150,
+        temperature=0.8,
+        frequency_penalty=0.3,
+        presence_penalty=0.3
     )
     # Log token usage & estimate cost
     usage = response.usage
