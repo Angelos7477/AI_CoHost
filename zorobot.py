@@ -377,22 +377,6 @@ def estimate_team_gold(players):
         team_gold[team] = team_gold.get(team, 0) + item_gold
     return team_gold
 
-def build_game_context(state):
-    if not state or "kills" not in state:
-        return "No game data available right now."
-    k = state.get("kills", 0)
-    d = state.get("deaths", 0)
-    a = state.get("assists", 0)
-    cs = state.get("cs", 0)
-    gold = state.get("gold", 0)
-    team = state.get("your_team", "UNKNOWN")
-    dragons = state.get("dragon_kills", {}).get(team, 0)
-    return (
-        f"Current in-game stats:\n"
-        f"K/D/A: {k}/{d}/{a}, CS: {cs}, Gold: {gold}\n"
-        f"Your team: {team}, Dragons: {dragons}\n"
-    )
-
 def is_game_related(question: str):
     q = question.lower()
     return any(word in q for word in ["winnable", "win", "lose", "score", "comeback", "game", "match", "gold", "kills", "cs", "status"])
@@ -916,7 +900,7 @@ class ZoroTheCasterBot(commands.Bot):
         with open("logs/askai_log.txt", "a", encoding="utf-8") as log_file:
             log_file.write(f"[{timestamp}] {user}: {question}\n")
         if "commentate" in question.lower() or "comentate" in question.lower():
-            full_prompt = f"Commentate on the current game:\n{build_game_context(previous_state)}\n\nViewer ({user}) asked: {question}"
+            full_prompt = f"🧠 Commentate on the current game:\n{self.build_game_context(previous_state)}\n\n🧠 Viewer ({user}) asked: {question}"
         else:
             full_prompt = f"Viewer ({user}) asked: {question}"
         await askai_queue.put((user, full_prompt))
@@ -954,6 +938,22 @@ class ZoroTheCasterBot(commands.Bot):
         except Exception as e:
             log_error(f"[SEND ERROR]: {e}")
             print(f"❌ Chat send error: {e}")
+
+    def build_game_context(self, state):
+        if not state or "kills" not in state:
+            return "No game data available right now."
+        k = state.get("kills", 0)
+        d = state.get("deaths", 0)
+        a = state.get("assists", 0)
+        cs = state.get("cs", 0)
+        gold = state.get("gold", 0)
+        team = state.get("your_team", "UNKNOWN")
+        dragons = state.get("dragon_kills", {}).get(team, 0)
+        return (
+            f"Current in-game stats:\n"
+            f"K/D/A: {k}/{d}/{a}, CS: {cs}, Gold: {gold}\n"
+            f"Your team: {team}, Dragons: {dragons}\n"
+        )
 
     async def personality_voting_timer(self):
         global voted_users
