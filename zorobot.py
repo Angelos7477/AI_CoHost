@@ -785,7 +785,7 @@ class ZoroTheCasterBot(commands.Bot):
     async def commands_list(self, ctx):
         commands_text = (
             "🤖 Commands: "
-            "🗳 `!vote` | 📊 `!results` | 🧠 `!askai` | ⏱ `!cooldown` | 📬 `!queue` | 📈 !status | 📄 `!commands` "
+            "🗳 `!vote` | 📊 `!results` | 🧠 `!askai` | 📚 `!askaihelp` | ⏱ `!cooldown` | 📬 `!queue` | 📈 !status | 📄 `!commands` "
             #" ⏸ `!pause` | ▶ `!resume` | ♻ `!resetcooldowns` | 🗑 `!clearqueue`"
         )
         await ctx.send(commands_text)
@@ -822,7 +822,14 @@ class ZoroTheCasterBot(commands.Bot):
         if length == 0:
             await ctx.send("📭 The AI queue is currently empty.")
         else:
-            await ctx.send(f"📬 There are currently {length} question(s) in the queue.")       
+            await ctx.send(f"📬 There are currently {length} question(s) in the queue.")   
+
+    @commands.command(name="askaihelp")
+    async def askai_help(self, ctx):
+        help_text = (
+            "💬 To ask ZoroTheCaster something, use `!askai [your question]` | 🎮 To trigger in-game commentary, include the word 'commentate'."
+        )
+        await ctx.send(help_text)
 
     @commands.command(name="clearqueue")
     async def clear_queue(self, ctx):
