@@ -52,7 +52,7 @@ voted_users = set()  # Track users who already voted this round
 tts_lock = asyncio.Lock()
 tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 tts_queue = asyncio.Queue()
-ASKAI_COOLDOWN_SECONDS = 150
+ASKAI_COOLDOWN_SECONDS = 40
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
 VOTING_DURATION = 600
@@ -900,9 +900,9 @@ class ZoroTheCasterBot(commands.Bot):
         with open("logs/askai_log.txt", "a", encoding="utf-8") as log_file:
             log_file.write(f"[{timestamp}] {user}: {question}\n")
         if "commentate" in question.lower() or "comentate" in question.lower():
-            full_prompt = f"🧠 Commentate on the current game:\n{self.build_game_context(previous_state)}\n\n🧠 Viewer ({user}) asked: {question}"
+            full_prompt = f"Commentate on the current game:\n{self.build_game_context(previous_state)}\n\n🧠 {user} asked: {question}"
         else:
-            full_prompt = f"Viewer ({user}) asked: {question}"
+            full_prompt = f"{user} asked: {question}"
         await askai_queue.put((user, full_prompt))
         await ctx.send(f"🧠 {user}, your question is queued at position #{askai_queue.qsize()}")
 
@@ -986,7 +986,7 @@ class ZoroTheCasterBot(commands.Bot):
                 if self.connected_channels:
                     commands_text = (
                         "🤖 Commands: "
-                        "🗳 `!vote` | 📊 `!results` | 🧠 `!askai` | ⏱ `!cooldown` | 📬 `!queue` | 📈 `!status` | 📄 `!commands` "
+                        "🗳 `!vote` | 📊 `!results` | 🧠 `!askai` | 📚 `!askaihelp` | ⏱ `!cooldown` | 📬 `!queue` | 📈 `!status` | 📄 `!commands` "
                     )
                     await self.connected_channels[0].send(commands_text)
             except Exception as e:
