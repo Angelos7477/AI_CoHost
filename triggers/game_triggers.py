@@ -16,6 +16,8 @@ class HPDropTrigger(GameTrigger):
         self.min_current_hp = min_current_hp
         self.cooldown = cooldown
         self.last_trigger_time = 0
+    def reset(self):
+        self.last_trigger_time = 0
     def check(self, current_data, previous_data):
         now = time.time()
         if now - self.last_trigger_time < self.cooldown:
@@ -39,7 +41,8 @@ class CSMilestoneTrigger(GameTrigger):
     def __init__(self, step=70):
         self.step = step
         self.last_milestone = 0
-
+    def reset(self):
+        self.last_milestone = 0
     def check(self, current_data, previous_data):
         cs = current_data.get("cs", 0)
         milestone = (cs // self.step) * self.step
@@ -53,7 +56,8 @@ class KillCountTrigger(GameTrigger):
     """Trigger when kills increase."""
     def __init__(self):
         self.last_kills = 0
-
+    def reset(self):
+        self.last_kills = 0
     def check(self, current_data, previous_data):
         kills = current_data.get("kills", 0)
         if kills > self.last_kills:
@@ -66,7 +70,8 @@ class DeathTrigger(GameTrigger):
     """Trigger when player dies (death count increases)."""
     def __init__(self):
         self.last_deaths = 0
-
+    def reset(self):
+        self.last_deaths = 0
     def check(self, current_data, previous_data):
         deaths = current_data.get("deaths", 0)
         if deaths > self.last_deaths:
@@ -85,6 +90,8 @@ class GoldThresholdTrigger:
     def __init__(self, cooldown=180):  # default 3 minutes
         self.cooldown = cooldown
         self.last_triggered = 0  # store timestamp of last trigger
+    def reset(self):
+        self.last_triggered = 0
     def check(self, current, previous):
         gold = current.get("gold", 0)
         now = current.get("timestamp", time.time())
@@ -97,7 +104,8 @@ class GoldThresholdTrigger:
 class FirstBloodTrigger:
     def __init__(self):
         self.triggered = False
-
+    def reset(self):
+        self.triggered = False
     def check(self, current, previous):
         if self.triggered:
             return None
@@ -111,6 +119,8 @@ class FirstBloodTrigger:
 
 class DragonKillTrigger:
     def __init__(self):
+        self.last_dragon_kills = {"ORDER": 0, "CHAOS": 0}
+    def reset(self):
         self.last_dragon_kills = {"ORDER": 0, "CHAOS": 0}
     def check(self, current, previous):
         team_dragon_kills = current.get("dragon_kills", {})

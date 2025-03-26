@@ -22,6 +22,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from triggers.game_triggers import HPDropTrigger, CSMilestoneTrigger, KillCountTrigger, DeathTrigger, GoldThresholdTrigger, FirstBloodTrigger, DragonKillTrigger
 from elevenlabs.client import ElevenLabs
 from elevenlabs import play, VoiceSettings
+import json
 
 
 # === Load Environment Variables ===
@@ -45,7 +46,7 @@ USE_ELEVENLABS = os.getenv("USE_ELEVENLABS", "true").lower() == "true"
 VALID_MODES = ["hype", "coach", "sarcastic", "wholesome"]
 # 🧠 Choose model and voice ID
 ELEVEN_MODEL = "eleven_turbo_v2_5"
-ELEVEN_VOICE_ID = "Xb7hH8MSUJpSbSDYk0k2"  # Replace this with the actual ID #Xb7hH8MSUJpSbSDYk0k2|Alice  #KLZOWyG48RjZkAAjuM89|angry_al  #UgBBYS2sOqTuMpoF3BR0|Mark
+ELEVEN_VOICE_ID = "TxGEqnHWrfWFTfGW9XjX"  # Replace this with the actual ID #Xb7hH8MSUJpSbSDYk0k2|Alice  #KLZOWyG48RjZkAAjuM89|angry_al  #TxGEqnHWrfWFTfGW9XjX|Josh
 vote_counts = defaultdict(int)
 voted_users = set()  # Track users who already voted this round
 tts_lock = asyncio.Lock()
@@ -376,10 +377,30 @@ def estimate_team_gold(players):
         team_gold[team] = team_gold.get(team, 0) + item_gold
     return team_gold
 
+def build_game_context(state):
+    if not state or "kills" not in state:
+        return "No game data available right now."
+    k = state.get("kills", 0)
+    d = state.get("deaths", 0)
+    a = state.get("assists", 0)
+    cs = state.get("cs", 0)
+    gold = state.get("gold", 0)
+    team = state.get("your_team", "UNKNOWN")
+    dragons = state.get("dragon_kills", {}).get(team, 0)
+    return (
+        f"Current in-game stats:\n"
+        f"K/D/A: {k}/{d}/{a}, CS: {cs}, Gold: {gold}\n"
+        f"Your team: {team}, Dragons: {dragons}\n"
+    )
+
+def is_game_related(question: str):
+    q = question.lower()
+    return any(word in q for word in ["winnable", "win", "lose", "score", "comeback", "game", "match", "gold", "kills", "cs", "status"])
+
 async def game_data_loop():
     global last_game_tts_time  # 🔥 Add this line!
     print("🕹️ Game Data Monitor started.")
-    initialized = False
+    #initialized = False
     while True:
         try:
             response = requests.get(LIVE_CLIENT_URL, timeout=5, verify=False)
@@ -389,6 +410,16 @@ async def game_data_loop():
             data = response.json()
             # 🟦 Get your Riot ID from activePlayer
             active_player = data.get("activePlayer", {})
+            # ❌ Game ended? Clear previous_state
+            if not active_player or not active_player.get("championStats"):
+                if previous_state.get("initialized"):
+                    print("🏁 Game ended. Clearing state.")
+                    previous_state.clear()
+                for trigger in triggers:
+                    if hasattr(trigger, "reset"):
+                        trigger.reset()
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
             riot_id = active_player.get("riotId", None)
             events = data.get("events", {}).get("Events", [])
             dragon_kill_events = [e for e in events if e.get("EventName") == "DragonKill"]
@@ -420,6 +451,16 @@ async def game_data_loop():
                     dragon_kills[team] += 1
             timestamp_now = time.time()
             game_time_seconds = data.get("gameData", {}).get("gameTime", 0)
+            # 🆕 Reset logic: detect new game if gameTime resets
+            if game_time_seconds < 10 and previous_state.get("last_game_time", 9999) > 30:
+                print("🔁 New game detected. Resetting previous_state.")
+                previous_state.clear()
+                for trigger in triggers:
+                    if hasattr(trigger, "reset"):
+                        trigger.reset()
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
+            previous_state["last_game_time"] = game_time_seconds  # always track current gameTime
             # 🆕 Initialize state from current game snapshot
             if not previous_state.get("initialized"):
                 previous_state.update({
@@ -436,27 +477,29 @@ async def game_data_loop():
                     "total_kills": total_kills,
                     "your_team": your_team,
                     "dragon_kills": dragon_kills,
+                    "last_game_time": game_time_seconds,  # ✅ Add this here
                     "initialized": True
                 })
                 print("📡 Initialized game_data_loop with current stats.")
                 await asyncio.sleep(POLL_INTERVAL)
                 continue
-            print(f"[GameLoop] K/D/A: {kills}/{deaths}/{assists}, CS: {cs}, HP: {hp}")
-            print(f"[DEBUG] dragon_kills: {dragon_kills}")
             # ✅ Build current_data dict to pass into triggers
             current_data = {
                 "hp": hp,
                 "cs": cs,
                 "kills": kills,
                 "deaths": deaths,
+                "last_hp": hp,
                 "gold": current_gold,  # ✅ add this
                 "item_gold": item_gold,  # ✅ Add this
                 "assists": assists,
                 "timestamp": timestamp_now,
                 "total_kills": total_kills,
                 "your_team": your_team,
-                "dragon_kills": dragon_kills
+                "dragon_kills": dragon_kills,
+                "last_game_time": game_time_seconds  # ✅ Add this line
             }
+            print(f"[GameLoop] current_data: {json.dumps(current_data, indent=2)}")
             # ✅ Collect all triggered messages
             merged_results = []
             for trigger in triggers:
@@ -465,7 +508,7 @@ async def game_data_loop():
                     merged_results.append(result)
             # ✅ If there are any events, and cooldown passed, send single merged AI prompt
             if merged_results and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
-                combined_prompt = "\n".join(merged_results)
+                combined_prompt = "Commentate on the current game:\n" + "\n".join(merged_results)
                 mode = get_current_mode()
                 ai_text = get_ai_response(combined_prompt, mode)
                 await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
@@ -481,6 +524,7 @@ async def game_data_loop():
                 if not last_snapshot:
                     last_snapshot = previous_state.copy()
                 recap_text = generate_game_recap(data, your_player_data, active_player, last_snapshot, dragon_kills)
+                recap_text = "Give a short, energetic recap of the current game:\n" + recap_text
                 if recap_text:
                     ai_text = get_ai_response(recap_text, get_current_mode())
                     await safe_add_to_tts_queue(("game", "GameRecap", ai_text))
@@ -509,7 +553,8 @@ async def game_data_loop():
                 "your_team": your_team,
                 "dragon_kills": dragon_kills,
                 "gold": current_gold,  # ✅ add this
-                "item_gold": item_gold  # ✅ Add this
+                "item_gold": item_gold,  # ✅ Add this
+                "last_game_time": game_time_seconds  # ✅ Add this line
             })
         except Exception as e:
             print(f"[GameMonitor Error]: {e}")
@@ -752,6 +797,7 @@ class ZoroTheCasterBot(commands.Bot):
     @commands.command(name="pause")
     async def pause_commentator(self, ctx):
         global commentator_paused
+        global eventsub_paused
         if ctx.author.is_broadcaster:
             commentator_paused = True
             eventsub_paused = True
@@ -762,6 +808,7 @@ class ZoroTheCasterBot(commands.Bot):
     @commands.command(name="resume")
     async def resume_commentator(self, ctx):
         global commentator_paused
+        global eventsub_paused
         if ctx.author.is_broadcaster:
             commentator_paused = False
             eventsub_paused = False
@@ -861,8 +908,11 @@ class ZoroTheCasterBot(commands.Bot):
         timestamp = datetime.now(timezone.utc).isoformat()
         with open("logs/askai_log.txt", "a", encoding="utf-8") as log_file:
             log_file.write(f"[{timestamp}] {user}: {question}\n")
-        askai_cooldowns[user] = now
-        await askai_queue.put((user, question))
+        if "commentate" in question.lower() or "comentate" in question.lower():
+            full_prompt = f"Commentate on the current game:\n{build_game_context(previous_state)}\n\nViewer ({user}) asked: {question}"
+        else:
+            full_prompt = f"Viewer ({user}) asked: {question}"
+        await askai_queue.put((user, full_prompt))
         await ctx.send(f"🧠 {user}, your question is queued at position #{askai_queue.qsize()}")
 
     async def process_askai_queue(self):

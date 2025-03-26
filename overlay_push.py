@@ -58,7 +58,7 @@ async def push_askai_cooldown_notice(user: str, text: str, duration: float = 2.0
         print(f"[Overlay Cooldown Notice Error] {e}")
     finally:
         # Allow this user to trigger the message again after the cooldown delay
-        await asyncio.sleep(40.0)  # Small buffer to avoid flicker spam
+        await asyncio.sleep(5.0)  # Small buffer to avoid flicker spam
         recent_cooldown_popups.discard(user)
 
 async def push_cost_overlay(amount):
