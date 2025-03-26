@@ -39,6 +39,7 @@ eleven = ElevenLabs(api_key=os.getenv("ELEVEN_API_KEY"))
 # === OpenAI Setup ===
 client = OpenAI(api_key=OPENAI_API_KEY)
 RIOT_API_KEY = os.getenv("RIOT_API_KEY") 
+USE_ELEVENLABS = os.getenv("USE_ELEVENLABS", "true").lower() == "true"
 
 # === Global Configs ===
 VALID_MODES = ["hype", "coach", "sarcastic", "wholesome"]
@@ -49,7 +50,7 @@ vote_counts = defaultdict(int)
 tts_lock = asyncio.Lock()
 tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 tts_queue = asyncio.Queue()
-ASKAI_COOLDOWN_SECONDS = 2
+ASKAI_COOLDOWN_SECONDS = 60
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
 VOTING_DURATION = 300
@@ -64,24 +65,24 @@ MAX_TTS_QUEUE_SIZE = 10  # Prevents spam/flood
 ASKAI_TTS_RESERVED_LIMIT = 7  # Maximum messages askai is allowed to use in TTS queue
 EVENTSUB_RESERVED_SLOTS = MAX_TTS_QUEUE_SIZE - ASKAI_TTS_RESERVED_LIMIT
 overlay_ws_task = None
-# 💡 Adjustable polling interval (every 3s)
-POLL_INTERVAL = 3
+# 💡 Adjustable polling interval (every 8s)
+POLL_INTERVAL = 8
 LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 # Basic state snapshot for change detection
 previous_state = {}
 triggers = [
     HPDropTrigger(threshold_percent=35, min_current_hp=70, cooldown=30),
-    CSMilestoneTrigger(step=70),
+    #CSMilestoneTrigger(step=70),
     KillCountTrigger(),
     DeathTrigger(),
-    GoldThresholdTrigger(cooldown=180),  # ⏱️ 3-minute cooldown
+    GoldThresholdTrigger(cooldown=240),  # ⏱️ 3-minute cooldown
     FirstBloodTrigger(),       # 🩸
     DragonKillTrigger()        # 🐉
 ]
 # 🔥 TTS cooldown config
-GAME_TTS_COOLDOWN = 1  # seconds
+GAME_TTS_COOLDOWN = 7  # seconds
 last_game_tts_time = 0  # global timestamp tracker
-AUTO_RECAP_INTERVAL = 360  # every 6 minutes
+AUTO_RECAP_INTERVAL = 600  # every 10 minutes
 
 # === Utility Functions ===
 def debug_imports():
@@ -152,15 +153,13 @@ def get_ai_response(prompt, mode):
     return response.choices[0].message.content
 
 def estimate_cost(model, prompt_tokens, completion_tokens):
-    # Source: https://openai.com/pricing
     if model.startswith("gpt-3.5-turbo"):
-        return (prompt_tokens + completion_tokens) / 1000 * 0.001  # $0.001 / 1K
-    elif model == "gpt-4":
+        return (prompt_tokens + completion_tokens) / 1000 * 0.001
+    elif model.startswith("gpt-4o"):
+        return (prompt_tokens + completion_tokens) / 1000 * 0.005
+    elif model.startswith("gpt-4"):
         return (prompt_tokens / 1000 * 0.03) + (completion_tokens / 1000 * 0.06)
-    elif model == "gpt-4o":
-        return (prompt_tokens + completion_tokens) / 1000 * 0.005  # $0.005 / 1K
-    else:
-        return 0.0  # Unknown model
+    return 0.0
 
 def get_event_reaction(event_type, user):
     base_prompt = {
@@ -174,19 +173,23 @@ def get_event_reaction(event_type, user):
     return get_ai_response(base_prompt, get_current_mode())
 
 def speak_sync(text):
-    try:
-        audio = eleven.generate(
-            text=text,
-            voice=ELEVEN_VOICE_ID,
-            model=ELEVEN_MODEL,
-            voice_settings=VoiceSettings(stability=0.5, similarity_boost=0.8))
-        play(audio)
-    except Exception as e:
-        log_error(f"[TTS FALLBACK] ElevenLabs failed, falling back to pyttsx3. Reason: {e}")
-        engine = pyttsx3.init()
-        engine.setProperty('rate', 160)
-        engine.say(text)
-        engine.runAndWait()
+    if USE_ELEVENLABS:
+        try:
+            audio = eleven.generate(
+                text=text,
+                voice=ELEVEN_VOICE_ID,
+                model=ELEVEN_MODEL,
+                voice_settings=VoiceSettings(stability=0.5, similarity_boost=0.8)
+            )
+            play(audio)
+            return
+        except Exception as e:
+            log_error(f"[TTS FALLBACK] ElevenLabs failed, falling back to pyttsx3. Reason: {e}")
+    # Either flag is false OR ElevenLabs failed
+    engine = pyttsx3.init()
+    engine.setProperty('rate', 160)
+    engine.say(text)
+    engine.runAndWait()
 
 async def speak_text(text):
     loop = asyncio.get_running_loop()
@@ -202,8 +205,10 @@ async def tts_worker():
                     _, user, question, answer = item
                     chat_message = f"{user}, ZoroTheCaster says: {answer}"
                     if bot_instance:
-                        await asyncio.sleep(1)
-                        await bot_instance.send_to_chat(chat_message)
+                        async def delayed_chat():
+                            await asyncio.sleep(0.5)
+                            await bot_instance.send_to_chat(chat_message)
+                        asyncio.create_task(delayed_chat())
                     # ✅ Delegate everything to the unified overlay method
                     if hasattr(bot_instance, "obs_controller"):
                         try:
@@ -227,8 +232,10 @@ async def tts_worker():
                     _, user, text = item
                     chat_message = f"{user}, ZoroTheCaster says: {text}"
                     if bot_instance:
-                        await asyncio.sleep(1)
-                        await bot_instance.send_to_chat(chat_message)
+                        async def delayed_chat():
+                            await asyncio.sleep(0.5)
+                            await bot_instance.send_to_chat(chat_message)
+                        asyncio.create_task(delayed_chat())
                     if hasattr(bot_instance, "obs_controller"):
                         try:
                             bot_instance.obs_controller.update_event_overlay(text)
@@ -250,8 +257,10 @@ async def tts_worker():
                     _, user, text = item
                     chat_message = f"{user}, ZoroTheCaster says: {text}"
                     if bot_instance:
-                        await asyncio.sleep(1)
-                        await bot_instance.send_to_chat(chat_message)
+                        async def delayed_chat():
+                            await asyncio.sleep(0.5)
+                            await bot_instance.send_to_chat(chat_message)
+                        asyncio.create_task(delayed_chat())
                     try:
                         await asyncio.sleep(1)
                         await push_commentary_overlay(text)
@@ -268,6 +277,7 @@ async def tts_worker():
         except Exception as e:
             log_error(f"TTS ERROR: {e}")
         tts_queue.task_done()
+        await asyncio.sleep(1.5)  # ⏱️ Small delay to avoid spammy speech
 
 
 async def safe_add_to_tts_queue(item):
