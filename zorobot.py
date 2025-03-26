@@ -45,12 +45,13 @@ USE_ELEVENLABS = os.getenv("USE_ELEVENLABS", "true").lower() == "true"
 VALID_MODES = ["hype", "coach", "sarcastic", "wholesome"]
 # 🧠 Choose model and voice ID
 ELEVEN_MODEL = "eleven_turbo_v2_5"
-ELEVEN_VOICE_ID = "KLZOWyG48RjZkAAjuM89"  # Replace this with the actual ID
+ELEVEN_VOICE_ID = "Xb7hH8MSUJpSbSDYk0k2"  # Replace this with the actual ID #Xb7hH8MSUJpSbSDYk0k2|Alice  #KLZOWyG48RjZkAAjuM89|angry_al  #UgBBYS2sOqTuMpoF3BR0|Mark
 vote_counts = defaultdict(int)
+voted_users = set()  # Track users who already voted this round
 tts_lock = asyncio.Lock()
 tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 tts_queue = asyncio.Queue()
-ASKAI_COOLDOWN_SECONDS = 60
+ASKAI_COOLDOWN_SECONDS = 150
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
 VOTING_DURATION = 600
@@ -133,7 +134,7 @@ def get_ai_response(prompt, mode):
             {"role": "user", "content": prompt}
         ],
         max_tokens=150,
-        temperature=0.8,
+        temperature=0.7,
         frequency_penalty=0.3,
         presence_penalty=0.3
     )
@@ -686,14 +687,19 @@ class ZoroTheCasterBot(commands.Bot):
 
     @commands.command(name="vote")
     async def vote(self, ctx):
+        username = ctx.author.name.lower()
         content = ctx.message.content.strip().lower()
         parts = content.split()
         if len(parts) < 2:
             await ctx.send(f"Usage: !vote [mode] — Valid: {', '.join(VALID_MODES)}")
             return
         mood = parts[1]
+        if username in voted_users:
+            await ctx.send(f"⛔ {username}, you have already voted this round!")
+            return
         if mood in VALID_MODES:
             vote_counts[mood] += 1
+            voted_users.add(username)  # ✅ Add user to set
             total_votes = vote_counts[mood]
             await ctx.send(f"{ctx.author.name} voted for '{mood}'! Total votes for {mood}: {total_votes}")
         else:
@@ -841,9 +847,9 @@ class ZoroTheCasterBot(commands.Bot):
             except Exception as e:
                 log_error(f"[Overlay Cooldown Notice ERROR] {e}")
             return
-        if not (ctx.author.is_subscriber or ctx.author.is_mod or ctx.author.is_broadcaster):
-            await ctx.send(f"❌ {user}, only subscribers, mods, or the streamer can use !askai.")
-            return
+        #if not (ctx.author.is_subscriber or ctx.author.is_mod or ctx.author.is_broadcaster):
+        #    await ctx.send(f"❌ {user}, only subscribers, mods, or the streamer can use !askai.")
+        #    return
         question = ctx.message.content.replace("!askai", "").strip()
         if not question:
             await ctx.send("Usage: !askai [your question]")
@@ -893,6 +899,7 @@ class ZoroTheCasterBot(commands.Bot):
             print(f"❌ Chat send error: {e}")
 
     async def personality_voting_timer(self):
+        global voted_users
         previous_mode = get_current_mode()
         while True:
             await asyncio.sleep(VOTING_DURATION)
@@ -913,6 +920,7 @@ class ZoroTheCasterBot(commands.Bot):
             else:
                 await self.connected_channels[0].send("🕓 Voting ended, no votes were cast.")
             vote_counts.clear()
+            voted_users.clear()  # ✅ Reset voted users for new round
             await self.connected_channels[0].send("🔄 Votes have been reset. Start voting again!")
 
     async def periodic_commands_reminder(self, interval=600):  # 600 sec = 10 minutes
