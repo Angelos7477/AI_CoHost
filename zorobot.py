@@ -899,7 +899,7 @@ class ZoroTheCasterBot(commands.Bot):
         timestamp = datetime.now(timezone.utc).isoformat()
         with open("logs/askai_log.txt", "a", encoding="utf-8") as log_file:
             log_file.write(f"[{timestamp}] {user}: {question}\n")
-        if "commentate" in question.lower() or "comentate" in question.lower():
+        if "commentate" in question.lower() or "comentate" in question.lower() or "commentary" in question.lower():
             full_prompt = f"Commentate on the current game:\n{self.build_game_context(previous_state)}\n\n🧠 {user} asked: {question}"
         else:
             full_prompt = f"{user} asked: {question}"
