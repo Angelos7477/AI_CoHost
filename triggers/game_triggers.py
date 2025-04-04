@@ -261,57 +261,47 @@ class GameEndTrigger(GameTrigger):
         return None
 
 class GoldDifferenceTrigger(GameTrigger):
-    def __init__(self, threshold=4000, major_threshold=8000, cooldown=600):
+    def __init__(self, threshold=4000, even_margin=1000, cooldown=600):  # 10 min cooldown
         self.threshold = threshold
-        self.major_threshold = major_threshold
         self.cooldown = cooldown
+        self.even_margin = even_margin  # 🔸 Gold difference under this is treated as "even"
+        self.last_trigger_diff = 0
         self.last_trigger_time = 0
-        self.last_status = "even"
-        self.last_gold_diff = 0
-        self.has_triggered_once = False  # NEW!
+        self.trigger_count = 0  # ✅ Count how many times we've triggered
+        self.has_triggered_once = False  # ✅ NEW
     def reset(self):
+        self.last_trigger_diff = 0
         self.last_trigger_time = 0
-        self.last_status = "even"
-        self.last_gold_diff = 0
+        self.trigger_count = 0  # ✅ Reset the counter too
         self.has_triggered_once = False
     def check(self, current, previous):
         now = time.time()
         gold_diff = current.get("gold_diff", 0)
-        abs_diff = abs(gold_diff)
-        team = current.get("your_team", "ORDER")
-        if abs_diff < self.threshold:
-            status = "even"
-        elif gold_diff > 0:
-            status = "ahead"
-        else:
-            status = "behind"
-        # === 🔥 Major shift triggers immediately ===
-        if status != self.last_status or abs_diff >= self.major_threshold:
+        delta = abs(gold_diff - self.last_trigger_diff)
+        # 🎯 Major change in gold difference
+        if delta >= self.threshold:
+            self.last_trigger_diff = gold_diff
             self.last_trigger_time = now
-            self.last_status = status
-            self.last_gold_diff = gold_diff
-            self.has_triggered_once = True  # ✅ Mark first trigger
-            if abs_diff >= self.major_threshold:
-                if status == "ahead":
-                    return f"🚀 You’re **crushing** them with a {abs_diff:,} gold lead!"
-                else:
-                    return f"😬 They’re stomping with a {abs_diff:,} gold lead. You need a miracle!"
-            if status == "ahead":
-                return f"💰 Your team is ahead by {abs_diff:,} gold! Time to press the lead!"
-            elif status == "behind":
-                return f"⚠️ You’re behind by {abs_diff:,} gold. Better play it safe!"
+            self.trigger_count += 1 # ✅ Track trigger
+            self.has_triggered_once = True  # ✅ Mark it
+            if gold_diff > self.even_margin:
+                return f"💰 Your team is ahead by {abs(gold_diff):,} gold!"
+            elif gold_diff < -self.even_margin:
+                return f"😬 They’re ahead by {abs(gold_diff):,} gold. Be careful!"
             else:
-                return f"💥 The gold is dead even — it’s anyone’s game!"
-        # === 💤 No big change, but cooldown passed: nudge the player ===
-        if self.has_triggered_once and (now - self.last_trigger_time) > self.cooldown:
-            self.last_trigger_time = now  # reset so it doesn’t spam
-            if status == "ahead":
-                return f"🕐 You’ve had the lead for a while now. What’s stopping you from ending it?"
-            elif status == "behind":
-                return f"🕐 Still behind after all this time. Can your team turn this around?"
+                return "💥 The gold is dead even again! What a rollercoaster!"
+        # 🕐 Passive nudge after cooldown
+        if self.has_triggered_once and (now - self.last_trigger_time >= self.cooldown):
+            self.last_trigger_time = now  # ✅ reset timer
+            self.trigger_count += 1  # ✅ Passive nudges count too
+            if gold_diff > self.even_margin:
+                return "🕐 You’ve been ahead for a while. What’s stopping you from ending it?"
+            elif gold_diff < -self.even_margin:
+                return "🕐 Still trailing... can your team find a way back in?"
             else:
-                return f"😐 It’s been an even game for a while. Who’s gonna make the next move?"
+                return "😐 It’s still even after all this time. Who’s going to make a move?"
         return None
+
 
 class AceTrigger(GameTrigger):
     def __init__(self):

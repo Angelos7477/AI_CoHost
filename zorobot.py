@@ -88,7 +88,7 @@ triggers = [
     AtakhanKillTrigger(),
     HeraldKillTrigger(),
     FeatsOfStrengthTrigger(),
-    GoldDifferenceTrigger(threshold=4000, major_threshold=8000, cooldown=600),
+    GoldDifferenceTrigger(threshold=4000, even_margin=1000, cooldown=600),
     BaronTrigger(),
     #MultikillEventTrigger(player_name="Zoro2000"),
 ]
