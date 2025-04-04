@@ -419,7 +419,12 @@ class FeatsOfStrengthTrigger(GameTrigger):
         self.voidgrub_sets_checked = 0
         self.voidgrub_objective_counts = defaultdict(int)
         self.horde_kill_buffer = []
-        self.team_objectives = defaultdict(Counter)  # ✅ store counts now
+        self.team_objectives = defaultdict(Counter)
+        self.locked_slots = {  # ✅ NEW: lock slots once achieved by a team
+            "kills": None,
+            "first_brick": None,
+            "objectives": None
+        }
     def reset(self):
         self.triggered = False
         self.triggered_team = None
@@ -427,13 +432,18 @@ class FeatsOfStrengthTrigger(GameTrigger):
         self.voidgrub_objective_counts.clear()
         self.horde_kill_buffer.clear()
         self.team_objectives.clear()
+        self.locked_slots = {
+            "kills": None,
+            "first_brick": None,
+            "objectives": None
+        }
     def check(self, current, previous):
         if self.triggered:
             return None
         events = current.get("events", {}).get("Events", [])
         all_players = current.get("allPlayers", [])
         your_team = current.get("your_team", "ORDER")
-        # ✅ Include persistent DragonKill data
+        # ✅ Load persistent DragonKill count
         for team_name, count in current.get("dragon_kills", {}).items():
             if count > 0:
                 self.team_objectives[team_name]["DragonKill"] = count
@@ -442,15 +452,21 @@ class FeatsOfStrengthTrigger(GameTrigger):
             killer_name = event.get("KillerName", "")
             killer_player = next((p for p in all_players if p.get("summonerName") == killer_name), None)
             team = killer_player.get("team", "UNKNOWN") if killer_player else None
+            # Special case: Minion first brick
+            if event["EventName"] == "FirstBrick" and not killer_player:
+                if killer_name.startswith("Minion_T100"):
+                    team = "ORDER"
+                elif killer_name.startswith("Minion_T200"):
+                    team = "CHAOS"
             if not team:
                 continue
             if team not in team_progress:
                 team_progress[team] = {
                     "kills": 0,
                     "first_brick": False,
-                    "objectives": Counter(self.team_objectives[team])  # ✅ preload objective counts
+                    "objectives": Counter(self.team_objectives[team])
                 }
-            # === Count progress ===
+            # === Track team progress ===
             if event["EventName"] == "ChampionKill":
                 team_progress[team]["kills"] += 1
             elif event["EventName"] == "FirstBrick":
@@ -458,21 +474,21 @@ class FeatsOfStrengthTrigger(GameTrigger):
             elif event["EventName"] in ["HeraldKill", "BaronKill", "AtakhanKill"]:
                 team_progress[team]["objectives"][event["EventName"]] += 1
                 self.team_objectives[team][event["EventName"]] += 1
-            if event["EventName"] == "HordeKill":
+            elif event["EventName"] == "HordeKill":
                 self._add_horde_kill(event, team)
-        # === Evaluate Voidgrub sets ===
+        # === Evaluate completed Voidgrub sets ===
         new_sets = len(self.horde_kill_buffer) // 3
         while self.voidgrub_sets_checked < new_sets:
             start = self.voidgrub_sets_checked * 3
             set_kills = self.horde_kill_buffer[start:start+3]
             teams = {entry["team"] for entry in set_kills}
             if len(teams) == 1:
-                team = teams.pop()
+                team = next(iter(teams))
                 if self.voidgrub_objective_counts[team] < 2:
                     self.voidgrub_objective_counts[team] += 1
                     self.team_objectives[team]["Voidgrub"] += 1
             self.voidgrub_sets_checked += 1
-        # ✅ Ensure teams without recent events are still in progress
+        # ✅ Ensure progress is present for both teams
         for team in ["ORDER", "CHAOS"]:
             if team not in team_progress:
                 team_progress[team] = {
@@ -480,18 +496,23 @@ class FeatsOfStrengthTrigger(GameTrigger):
                     "first_brick": False,
                     "objectives": Counter(self.team_objectives[team])
                 }
-        # === Debug printout ===
         print("[Voidgrub Debug] Completed sets:", dict(self.voidgrub_objective_counts))
         print("[Feats Debug] ORDER progress:", team_progress.get("ORDER", {}))
         print("[Feats Debug] CHAOS progress:", team_progress.get("CHAOS", {}))
-        # === Final trigger check ===
+        # === Evaluate trigger ===
         for team, progress in team_progress.items():
             total_objectives = sum(progress["objectives"].values())
-            conditions_met = sum([
-                progress["kills"] >= 3,
-                progress["first_brick"],
-                total_objectives >= 3
-            ])
+            conditions_met = 0
+            # 🔒 Lock per slot when achieved
+            if self.locked_slots["kills"] in (None, team) and progress["kills"] >= 3:
+                self.locked_slots["kills"] = team
+                conditions_met += 1
+            if self.locked_slots["first_brick"] in (None, team) and progress["first_brick"]:
+                self.locked_slots["first_brick"] = team
+                conditions_met += 1
+            if self.locked_slots["objectives"] in (None, team) and total_objectives >= 3:
+                self.locked_slots["objectives"] = team
+                conditions_met += 1
             if conditions_met >= 2:
                 self.triggered = True
                 self.triggered_team = team
