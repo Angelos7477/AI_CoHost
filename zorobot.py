@@ -14,12 +14,15 @@ import concurrent.futures
 from shutdown_hooks import setup_shutdown_hooks
 from obs_controller import OBSController, log_obs_event
 from overlay_ws_server import start_server as start_overlay_ws_server
-from overlay_push import push_askai_overlay,push_event_overlay,push_commentary_overlay,push_hide_overlay,push_askai_cooldown_notice,push_cost_overlay,push_cost_increment
+from overlay_push import (push_askai_overlay,push_event_overlay,push_commentary_overlay,push_hide_overlay,
+                push_askai_cooldown_notice,push_cost_overlay,push_cost_increment)
 import requests
 import time
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-from triggers.game_triggers import HPDropTrigger, CSMilestoneTrigger, KillCountTrigger, DeathTrigger, GoldThresholdTrigger, FirstBloodTrigger, DragonKillTrigger
+from triggers.game_triggers import (HPDropTrigger, CSMilestoneTrigger, KillCountTrigger, DeathTrigger, GoldThresholdTrigger, FirstBloodTrigger,
+             DragonKillTrigger, MultikillEventTrigger, GameEndTrigger, GoldDifferenceTrigger, AceTrigger, BaronTrigger, AtakhanKillTrigger, HeraldKillTrigger,
+             FeatsOfStrengthTrigger)
 from elevenlabs.client import ElevenLabs
 from elevenlabs import play, VoiceSettings
 import json
@@ -77,14 +80,25 @@ triggers = [
     #CSMilestoneTrigger(step=70),
     KillCountTrigger(),
     DeathTrigger(),
-    GoldThresholdTrigger(cooldown=240),  # ⏱️ 4-minute cooldown
+    GoldThresholdTrigger(cooldown=300),  # ⏱️ 4-minute cooldown
     FirstBloodTrigger(),       # 🩸
-    DragonKillTrigger()        # 🐉
+    DragonKillTrigger(),        # 🐉
+    GameEndTrigger(),
+    AceTrigger(),
+    AtakhanKillTrigger(),
+    HeraldKillTrigger(),
+    FeatsOfStrengthTrigger(),
+    GoldDifferenceTrigger(threshold=4000, major_threshold=8000, cooldown=600),
+    BaronTrigger(),
+    #MultikillEventTrigger(player_name="Zoro2000"),
 ]
 # 🔥 TTS cooldown config
 GAME_TTS_COOLDOWN = 4  # seconds
 last_game_tts_time = 0  # global timestamp tracker
 AUTO_RECAP_INTERVAL = 600  # every 10 minutes
+
+ITEM_CACHE_FILE = "cached_item_prices.json"
+ITEM_PRICES = None  # declare globally
 
 # === Utility Functions ===
 def debug_imports():
@@ -111,6 +125,31 @@ def debug_imports():
         print("❌ Error checking OpenAI client:", e)
     print("=== End of Import Debug ===\n")
 
+def load_item_prices():
+    url = "https://ddragon.leagueoflegends.com/cdn/15.7.1/data/en_US/item.json"
+    response = requests.get(url)
+    data = response.json()
+    prices = {int(k): v["gold"]["total"] for k, v in data["data"].items()}
+    # ✅ Save to disk cache
+    with open(ITEM_CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(prices, f)
+    return prices
+
+def load_item_prices_from_cache():
+    try:
+        if os.path.exists(ITEM_CACHE_FILE):
+            with open(ITEM_CACHE_FILE, "r", encoding="utf-8") as f:
+                return {int(k): v for k, v in json.load(f).items()}
+    except Exception as e:
+        print("[ItemCache] Failed to load item cache:", e)
+    return None
+
+def ensure_item_prices_loaded():
+    global ITEM_PRICES
+    if ITEM_PRICES is None:
+        ITEM_PRICES = load_item_prices_from_cache() or load_item_prices()
+    return ITEM_PRICES
+
 def get_current_mode():
     try:
         with open("current_mode.txt", "r") as f:
@@ -129,7 +168,7 @@ def load_system_prompt(mode):
 def get_ai_response(prompt, mode):
     system_prompt = load_system_prompt(mode)
     response = client.chat.completions.create(
-        model="gpt-4o",  #gpt-4o , gpt-3.5-turbo
+        model="gpt-3.5-turbo",  #gpt-4o , gpt-3.5-turbo
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
@@ -303,7 +342,10 @@ def log_event(text: str):
     timestamp = datetime.now(timezone.utc).isoformat()
     with open("logs/openai_usage.log", "a", encoding="utf-8") as log_file:
         log_file.write(f"[{timestamp}] {text}\n")
-
+def log_merged_prompt(text: str):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with open("logs/merged_prompts.log", "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {text.strip()}\n")
 
 def generate_game_recap(all_data, you, active_player, last_snapshot=None, dragon_kills=None):
     your_name = you.get("summonerName", "You")
@@ -369,12 +411,17 @@ def generate_game_recap(all_data, you, active_player, last_snapshot=None, dragon
     return "Since the last update:\n" + "\n".join(recap_lines) + "\n" + summary
 
 def estimate_team_gold(players):
+    ensure_item_prices_loaded()
     team_gold = {}
     for player in players:
         team = player.get("team", "UNKNOWN")
         items = player.get("items", [])
-        item_gold = sum(item.get("price", 0) * item.get("count", 1) for item in items)
-        team_gold[team] = team_gold.get(team, 0) + item_gold
+        total = 0
+        for item in items:
+            item_id = item.get("itemID")
+            real_price = ITEM_PRICES.get(item_id, 0)
+            total += real_price * item.get("count", 1)
+        team_gold[team] = team_gold.get(team, 0) + total
     return team_gold
 
 def is_game_related(question: str):
@@ -426,6 +473,12 @@ async def game_data_loop():
             item_gold = sum(item.get("price", 0) * item.get("count", 1) for item in your_player_data.get("items", []))
             your_team = your_player_data.get("team", "ORDER")
             total_kills = sum(p.get("scores", {}).get("kills", 0) for p in all_players)
+            teams_gold = estimate_team_gold(all_players)
+            your_team_gold = teams_gold.get(your_team, 0)
+            enemy_team_gold = sum(v for k, v in teams_gold.items() if k != your_team)
+            print(f"[Gold Debug] ORDER total gold: {teams_gold.get('ORDER', 0)}")
+            print(f"[Gold Debug] CHAOS total gold: {teams_gold.get('CHAOS', 0)}")
+            gold_diff = your_team_gold - enemy_team_gold
             dragon_kills = {"ORDER": 0, "CHAOS": 0}
             for e in dragon_kill_events:
                 killer = e.get("KillerName", "")
@@ -464,6 +517,11 @@ async def game_data_loop():
                     "last_game_time": game_time_seconds,  # ✅ Add this here
                     "initialized": True
                 })
+                # 🎯 Dynamically insert your name into the MultikillEventTrigger
+                if not previous_state.get("multikill_trigger_set"):
+                    your_name = your_player_data.get("summonerName")
+                    triggers.append(MultikillEventTrigger(your_name=your_name))
+                    previous_state["multikill_trigger_set"] = True
                 print("📡 Initialized game_data_loop with current stats.")
                 await asyncio.sleep(POLL_INTERVAL)
                 continue
@@ -481,9 +539,16 @@ async def game_data_loop():
                 "total_kills": total_kills,
                 "your_team": your_team,
                 "dragon_kills": dragon_kills,
-                "last_game_time": game_time_seconds  # ✅ Add this line
+                "last_game_time": game_time_seconds,  # ✅ Add this line
+                "gold_diff": gold_diff,
+                "allPlayers": all_players,  # ✅ Now triggers can access full player info!
+                "events": data.get("events", {})  # ✅ Add this!
             }
-            print(f"[GameLoop] current_data: {json.dumps(current_data, indent=2)}")
+            # Copy current_data just for debugging purposes
+            debug_data = current_data.copy()
+            debug_data.pop("allPlayers", None)
+            debug_data.pop("events", None)
+            print(f"[GameLoop] current_data (clean): {json.dumps(debug_data, indent=2)}")
             # ✅ Collect all triggered messages
             merged_results = []
             for trigger in triggers:
@@ -493,6 +558,7 @@ async def game_data_loop():
             # ✅ If there are any events, and cooldown passed, send single merged AI prompt
             if merged_results and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
                 combined_prompt = "Commentate on the current game:\n" + "\n".join(merged_results)
+                log_merged_prompt(combined_prompt)
                 mode = get_current_mode()
                 ai_text = get_ai_response(combined_prompt, mode)
                 await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
@@ -524,7 +590,10 @@ async def game_data_loop():
                         "dragon_kills": dragon_kills,
                         "gold": current_gold,  # ✅ add this
                         "item_gold": item_gold,  # ✅ Add this
-                        "timestamp": timestamp_now
+                        "timestamp": timestamp_now,
+                        "gold_diff": gold_diff,
+                        "allPlayers": all_players,  # ✅ Now triggers can access full player info!
+                        "events": data.get("events", {})  # ✅ Add this!
                     }
             # ✅ Update previous state
             previous_state.update({
@@ -538,7 +607,10 @@ async def game_data_loop():
                 "dragon_kills": dragon_kills,
                 "gold": current_gold,  # ✅ add this
                 "item_gold": item_gold,  # ✅ Add this
-                "last_game_time": game_time_seconds  # ✅ Add this line
+                "last_game_time": game_time_seconds,  # ✅ Add this line
+                "gold_diff": gold_diff,
+                "allPlayers": all_players,  # ✅ Now triggers can access full player info!
+                "events": data.get("events", {}),  # ✅ Add this!
             })
         except Exception as e:
             print(f"[GameMonitor Error]: {e}")
@@ -998,6 +1070,9 @@ class ZoroTheCasterBot(commands.Bot):
 if __name__ == "__main__":
     debug_imports()
     setup_shutdown_hooks(bot_instance=None, executor=tts_executor)
+    # 🔧 Force item prices to load (and cache file to be created)
+    #ensure_item_prices_loaded()
+    #print("[DEBUG] Item prices loaded:", len(ITEM_PRICES), "items")
     async def startup_tasks():
         # Start WebSocket overlay server
         global overlay_ws_task

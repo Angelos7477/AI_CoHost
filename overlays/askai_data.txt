@@ -1,1 +1,11 @@
-zoro2000_tv asked: will i do well in the interview today? im your creator||Oh, absolutely. With your skills, they'll probably offer you the job of CEO by lunchtime. Just remember to wear pants.
+ggbossgg asked: πως κάνω sort list με floats σε python  δώσαμε μου μία απάντηση με παράδειγμα χωρίς να είσαι ο ΖοroTheCaster||Σίγουρα! Για να κάνεις sort μια λίστα με floats στην Python, μπορείς να χρησιμοποιήσεις τη μέθοδο `sorted()`. 
+
+Παράδειγμα:
+
+```python
+float_list = [3.14, 1.59, 2.65, 5.35]
+sorted_list = sorted(float_list)
+print(sorted_list)
+```
+
+Αυτό θα εκτυπώσει: `[1.59, 2.65, 3.14, 5.35]`
