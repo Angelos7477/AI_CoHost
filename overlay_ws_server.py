@@ -8,10 +8,27 @@ PORT = int(os.getenv("OVERLAY_WS_PORT", 8765))
 connected_clients = set()
 print("💡 overlay_ws_server.py loaded")
 
+def get_current_mood():
+    try:
+        with open("current_mode.txt", "r") as f:
+            return f.read().strip()
+    except:
+        return "hype"  # Default fallback
+
 async def handler(websocket):
     client_id = id(websocket)
     print(f"[WS] Overlay connected - ID: {id(websocket)} | Total: {len(connected_clients)}")
     connected_clients.add(websocket)
+        # 🧠 Immediately send current mood to the just-connected overlay
+    try:
+        current_mood = get_current_mood()
+        await websocket.send(json.dumps({
+            "type": "mood",
+            "text": current_mood
+        }))
+        print(f"[WS] Sent initial mood '{current_mood}' to client {client_id}")
+    except Exception as e:
+        print(f"[WS] Failed to send initial mood to {client_id}: {e}")
     try:
         async for message in websocket:
             print("Received from overlay:", message)
@@ -53,13 +70,15 @@ async def send_test_messages():
     await broadcast({"type": "commentary", "text": "Huge gank in midlane!"})
 
 if __name__ == "__main__":
-    try:
-        loop = asyncio.get_event_loop()
-        loop.create_task(start_server())
-
+    async def main():
+        server_task = asyncio.create_task(start_server())
         # Optional: Test messages (can be removed in production)
-        loop.create_task(send_test_messages())
-
-        loop.run_forever()
+        test_task = asyncio.create_task(send_test_messages())
+        try:
+            await asyncio.gather(server_task, test_task)
+        except asyncio.CancelledError:
+            print("🛑 Server tasks cancelled cleanly.")
+    try:
+        asyncio.run(main())
     except KeyboardInterrupt:
         print("Shutting down WebSocket server.")

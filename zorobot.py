@@ -15,7 +15,7 @@ from shutdown_hooks import setup_shutdown_hooks
 from obs_controller import OBSController, log_obs_event
 from overlay_ws_server import start_server as start_overlay_ws_server
 from overlay_push import (push_askai_overlay,push_event_overlay,push_commentary_overlay,push_hide_overlay,
-                push_askai_cooldown_notice,push_cost_overlay,push_cost_increment)
+                push_askai_cooldown_notice,push_cost_overlay,push_cost_increment, push_mood_overlay)
 import requests
 import time
 import urllib3
@@ -73,10 +73,9 @@ tts_queue = asyncio.Queue()
 ASKAI_COOLDOWN_SECONDS = 40
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
-VOTING_DURATION = 600
+VOTING_DURATION = 180
 last_moodroll_time = 0  # Global cooldown timer
 MOODROLL_COOLDOWN = 60  # seconds
-MOOD_AUTO_SWITCH_INTERVAL = 120  # seconds (2 minutes)
 askai_cooldowns = {}
 askai_queue = asyncio.Queue()
 current_mode_cache = "hype"  # default
@@ -684,7 +683,6 @@ class ZoroTheCasterBot(commands.Bot):
         self.loop.create_task(self.personality_voting_timer())
         self.loop.create_task(self.periodic_commands_reminder())
         self.loop.create_task(self.process_askai_queue())
-        asyncio.create_task(self.auto_mood_loop())
         #self.loop.create_task(start_commentator_mode(60))
         self.loop.create_task(tts_worker())
         await self.init_eventsub()
@@ -896,6 +894,10 @@ class ZoroTheCasterBot(commands.Bot):
             f.write(new_mode)
         current_mode_cache = new_mode
         last_moodroll_time = now
+        try:
+            await push_mood_overlay(new_mode)
+        except Exception as e:
+            log_error(f"[Overlay Mood Push ERROR] {e}")
         await ctx.send(f"🎲 Mood roll! ZoroTheCaster is now in **{new_mode.upper()}** mode!")
 
     @commands.command(name="nextroll")
@@ -1087,55 +1089,36 @@ class ZoroTheCasterBot(commands.Bot):
 
     async def personality_voting_timer(self):
         global voted_users
-        global current_mode_cache  # ✅ Add this
+        global current_mode_cache
+        global last_moodroll_time
         previous_mode = get_current_mode()
+        await asyncio.sleep(10)  # Initial startup delay
         while True:
             await asyncio.sleep(VOTING_DURATION)
             if vote_counts:
                 most_voted = Counter(vote_counts).most_common(1)[0]
                 new_mode, count = most_voted
-                with open("current_mode.txt", "w") as f:
-                    f.write(new_mode)
-                current_mode_cache = new_mode  # ✅ Update the cache
                 await self.connected_channels[0].send(
-                    f"✨ Voting closed! Winning AI personality: **{new_mode.upper()}** with {count} votes!")
-                # ✅ Only announce if mode actually changed
-                if new_mode != previous_mode:
-                    await safe_add_to_tts_queue(f"The new AI personality is {new_mode} mode.")
-                    previous_mode = new_mode  # Update tracking
-                else:
-                    await self.connected_channels[0].send(
-                        f"🟰 Personality remains in {new_mode.upper()} mode.")
+                    f"✨ Voting closed! Winning AI personality: **{new_mode.upper()}** with {count} votes!"
+                )
             else:
-                await self.connected_channels[0].send("🕓 Voting ended, no votes were cast.")
-            vote_counts.clear()
-            voted_users.clear()  # ✅ Reset voted users for new round
-            await self.connected_channels[0].send("🔄 Votes have been reset. Start voting again!")
-
-    async def auto_mood_loop(self):
-        global last_moodroll_time
-        global current_mode_cache
-        await asyncio.sleep(10)  # initial delay after startup
-        while True:
-            await asyncio.sleep(MOOD_AUTO_SWITCH_INTERVAL)
-            try:
-                with open("current_mode.txt", "r") as f:
-                    current_mode = f.read().strip().lower()
-            except:
-                current_mode = None
-            choices = [mode for mode in VALID_MODES if mode != current_mode]
-            new_mode = random.choice(choices)
+                current_mode = get_current_mode()
+                choices = [mode for mode in VALID_MODES if mode != current_mode]
+                new_mode = random.choice(choices)
+                await self.connected_channels[0].send(
+                    f"🔁 No votes cast. Auto-switching to **{new_mode.upper()}** mode!"
+                )
             with open("current_mode.txt", "w") as f:
                 f.write(new_mode)
-            current_mode_cache = new_mode  # ✅ update the in-memory cache
-            last_moodroll_time = time.time()  # reset cooldown to prevent immediate roll after auto switch
-            await self.connected_channels[0].send(
-                f"🔁 Auto-switch activated! ZoroTheCaster is now in **{new_mode.upper()}** mode!")
-            #if tts_queue.empty():
-                #await safe_add_to_tts_queue(f"The mood has changed to {new_mode} mode.")
-            #else:
-                #print("[TTS] Skipping mood voice line — TTS is busy.")
-
+            current_mode_cache = new_mode
+            last_moodroll_time = time.time()
+            try:
+                await push_mood_overlay(new_mode)
+            except Exception as e:
+                log_error(f"[Overlay Mood Push ERROR] {e}")
+            vote_counts.clear()
+            voted_users.clear()
+            await self.connected_channels[0].send("🔄 Votes have been reset. Start voting again!")
 
     async def periodic_commands_reminder(self, interval=600):  # 600 sec = 10 minutes
         while True:

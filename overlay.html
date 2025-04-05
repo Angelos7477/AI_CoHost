@@ -55,23 +55,34 @@
     }
 
     #commentary-overlay {
-      top: 7%;
+      top: 9%;
       left: 50%;
       transform: translateX(-50%);
     }
 
     #event-overlay {
-      top: 7%;
+      top: 9%;
       left: 5%;
     }
     #personality-icon {
       position: absolute;
-      top: 10px;
+      top: 23px;
       left: 50%;
       transform: translateX(-50%);
       width: 64px;
       height: 64px;
       z-index: 1000;
+    }
+    #mood-text {
+      position: absolute;
+      top: 4px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 12px;
+      font-weight: bold;
+      color: white;
+      text-shadow: 1px 1px 3px rgba(0,0,0,0.7);
+      z-index: 1001;
     }
 
   </style>
@@ -84,6 +95,7 @@
   <div id="event-overlay">🎉 Waiting for Events...</div>
   <div id="cooldown-overlay">⏳ Cooldown...</div>
   <div id="cost-overlay">💰 Cost: $0.00000</div>
+  <div id="mood-text"> Personality Name...</div>
 
   <script>
     const askaiDiv = document.getElementById("askai-overlay");
@@ -152,10 +164,13 @@
           costDiv.textContent = `💰 Total API Cost: $${parseFloat(data.amount).toFixed(4)}`;
           costDiv.style.display = "block";
         } else if (data.type === "mood") {
-          // Optional: use this to change a header or apply a style
-          console.log("🔄 Mood update:", data.text);
+          const mode = data.text.toLowerCase();
+          const icon = iconMap[mode] || "icons/default.png";
+          personalityIcon.src = icon;
+          document.getElementById("mood-text").textContent = mode.toUpperCase();  // 👈 Add this line
+          console.log("🔄 Mood update via WebSocket:", mode);
         } else {
-          console.log("⚠️ Unknown message type:", data);
+            console.log("⚠️ Unknown message type:", data);
         }
       };
 
@@ -178,19 +193,6 @@
         }, 5000);
       }
     }
-    /*personality functions. it reads from current_mode.txt and updates every 3 seconds*/
-    async function updatePersonalityIcon() {
-      try {
-        const res = await fetch("current_mode.txt?_=" + new Date().getTime());
-        const mode = (await res.text()).trim().toLowerCase();
-        const icon = iconMap[mode] || "icons/default.png";
-        personalityIcon.src = icon;
-      } catch (e) {
-        console.error("[HTML] Could not fetch personality mode:", e);
-      }
-    }
-    setInterval(updatePersonalityIcon, 3000);
-    updatePersonalityIcon();
 
     connectWS();
   </script>
