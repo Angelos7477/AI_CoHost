@@ -1,4 +1,9 @@
-openai
-python-dotenv
-pyttsx3
 twitchio
+twitchAPI
+obs-websocket-py
+openai
+elevenlabs
+requests
+aiohttp
+websockets
+pyttsx3

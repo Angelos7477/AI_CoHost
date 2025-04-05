@@ -46,7 +46,7 @@ RIOT_API_KEY = os.getenv("RIOT_API_KEY")
 USE_ELEVENLABS = os.getenv("USE_ELEVENLABS", "true").lower() == "true"
 
 # === Global Configs ===
-VALID_MODES = ["hype", "coach", "sarcastic", "wholesome"]
+VALID_MODES = ["hype", "coach", "sarcastic", "wholesome","troll","smartass","tsundere","edgelord","shakespeare","genz"]
 # 🧠 Choose model and voice ID
 ELEVEN_MODEL = "eleven_turbo_v2_5"
 ELEVEN_VOICE_ID = "TxGEqnHWrfWFTfGW9XjX"  # Replace this with the actual ID #Xb7hH8MSUJpSbSDYk0k2|Alice  #KLZOWyG48RjZkAAjuM89|angry_al  #TxGEqnHWrfWFTfGW9XjX|Josh
@@ -168,7 +168,7 @@ def load_system_prompt(mode):
 def get_ai_response(prompt, mode):
     system_prompt = load_system_prompt(mode)
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",  #gpt-4o , gpt-3.5-turbo
+        model="gpt-4o",  #gpt-4o , gpt-3.5-turbo
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
