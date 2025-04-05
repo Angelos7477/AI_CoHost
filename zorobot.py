@@ -26,6 +26,7 @@ from triggers.game_triggers import (HPDropTrigger, CSMilestoneTrigger, KillCount
 from elevenlabs.client import ElevenLabs
 from elevenlabs import play, VoiceSettings
 import json
+import random
 
 
 # === Load Environment Variables ===
@@ -49,7 +50,21 @@ USE_ELEVENLABS = os.getenv("USE_ELEVENLABS", "true").lower() == "true"
 VALID_MODES = ["hype", "coach", "sarcastic", "wholesome","troll","smartass","tsundere","edgelord","shakespeare","genz"]
 # 🧠 Choose model and voice ID
 ELEVEN_MODEL = "eleven_turbo_v2_5"
-ELEVEN_VOICE_ID = "TxGEqnHWrfWFTfGW9XjX"  # Replace this with the actual ID #Xb7hH8MSUJpSbSDYk0k2|Alice  #KLZOWyG48RjZkAAjuM89|angry_al  #TxGEqnHWrfWFTfGW9XjX|Josh
+ELEVEN_VOICE_ID = "TxGEqnHWrfWFTfGW9XjX"  # ← keep only as default/fallback
+# 🔊 Personality to Voice ID mapping
+VOICE_BY_MODE = {
+    "hype": "TxGEqnHWrfWFTfGW9XjX",       # Josh
+    "smartass": "TxGEqnHWrfWFTfGW9XjX",   # Josh
+    "shakespeare": "TxGEqnHWrfWFTfGW9XjX",# Josh
+    "coach": "21m00Tcm4TlvDq8ikWAM",      # Rachel
+    "wholesome": "21m00Tcm4TlvDq8ikWAM",  # Rachel
+    "tsundere": "21m00Tcm4TlvDq8ikWAM",   # Rachel
+    "genz": "21m00Tcm4TlvDq8ikWAM",       # Rachel
+    "sarcastic": "2EiwWnXFnvU5JabPnv8n",  # Clyde
+    "troll": "2EiwWnXFnvU5JabPnv8n",      # Clyde
+    "edgelord": "2EiwWnXFnvU5JabPnv8n",   # Clyde
+}
+# Replace this with the actual ID Josh #TxGEqnHWrfWFTfGW9XjX | Clyde #2EiwWnXFnvU5JabPnv8n | Rachel #21m00Tcm4TlvDq8ikWAM
 vote_counts = defaultdict(int)
 voted_users = set()  # Track users who already voted this round
 tts_lock = asyncio.Lock()
@@ -59,8 +74,12 @@ ASKAI_COOLDOWN_SECONDS = 40
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
 VOTING_DURATION = 600
+last_moodroll_time = 0  # Global cooldown timer
+MOODROLL_COOLDOWN = 60  # seconds
+MOOD_AUTO_SWITCH_INTERVAL = 120  # seconds (2 minutes)
 askai_cooldowns = {}
 askai_queue = asyncio.Queue()
+current_mode_cache = "hype"  # default
 commentator_paused = False  # New flag
 eventsub_paused = False
 # Global reference to bot instance (initialized later)
@@ -151,12 +170,20 @@ def ensure_item_prices_loaded():
     return ITEM_PRICES
 
 def get_current_mode():
+    global current_mode_cache
+    return current_mode_cache
+
+def load_initial_mode():
+    global current_mode_cache
     try:
         with open("current_mode.txt", "r") as f:
             mode = f.read().strip().lower()
-            return mode if mode in VALID_MODES else "hype"
+            if mode in VALID_MODES:
+                current_mode_cache = mode
+            else:
+                current_mode_cache = "hype"
     except FileNotFoundError:
-        return "hype"
+        current_mode_cache = "hype"
 
 def load_system_prompt(mode):
     try:
@@ -215,12 +242,12 @@ def get_event_reaction(event_type, user):
     }.get(event_type, f"{user} triggered an unknown event. React accordingly.")
     return get_ai_response(base_prompt, get_current_mode())
 
-def speak_sync(text):
+def speak_sync(text, voice_id=ELEVEN_VOICE_ID):
     if USE_ELEVENLABS:
         try:
             audio = eleven.generate(
                 text=text,
-                voice=ELEVEN_VOICE_ID,
+                voice=voice_id,
                 model=ELEVEN_MODEL,
                 voice_settings=VoiceSettings(stability=0.5, similarity_boost=0.8)
             )
@@ -236,7 +263,9 @@ def speak_sync(text):
 
 async def speak_text(text):
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(tts_executor, speak_sync, text)
+    mode = get_current_mode()
+    voice_id = VOICE_BY_MODE.get(mode, ELEVEN_VOICE_ID)
+    await loop.run_in_executor(tts_executor, speak_sync, text, voice_id)
 
 async def tts_worker():
     while True:
@@ -655,6 +684,7 @@ class ZoroTheCasterBot(commands.Bot):
         self.loop.create_task(self.personality_voting_timer())
         self.loop.create_task(self.periodic_commands_reminder())
         self.loop.create_task(self.process_askai_queue())
+        asyncio.create_task(self.auto_mood_loop())
         #self.loop.create_task(start_commentator_mode(60))
         self.loop.create_task(tts_worker())
         await self.init_eventsub()
@@ -840,15 +870,43 @@ class ZoroTheCasterBot(commands.Bot):
     @commands.command(name="commands")
     async def commands_list(self, ctx):
         commands_text = (
-            "🤖 Commands: "
-            "🗳 `!vote` | 📊 `!results` | 🧠 `!askai` | 📚 `!askaihelp` | ⏱ `!cooldown` | 📬 `!queue` | 📈 !status | 📄 `!commands` "
+            "🤖 Commands: 🗳 `!vote` | 📊 `!results` | 🧠 `!askai` | 📚 `!askaihelp` | "
+            "⏱ `!cooldown` | 📬 `!queue` | 🎲 `!moodroll` | ⏳ `!nextroll` | 📈 !status | 📄 `!commands` "
             #" ⏸ `!pause` | ▶ `!resume` | ♻ `!resetcooldowns` | 🗑 `!clearqueue`"
         )
         await ctx.send(commands_text)
 
-    @commands.command(name="hello")
-    async def hello(self, ctx):
-        await ctx.send(f"Hello {ctx.author.name}! I'm ZoroTheCaster. 😊")
+    @commands.command(name="moodroll")
+    async def moodroll(self, ctx):
+        global last_moodroll_time
+        global current_mode_cache  # ✅ Add this
+        now = time.time()
+        if now - last_moodroll_time < MOODROLL_COOLDOWN:
+            #remaining = int(MOODROLL_COOLDOWN - (now - last_moodroll_time))
+            #await ctx.send(f"⏳ Mood roll is on cooldown! Try again in {remaining} seconds.")
+            return
+        try:
+            with open("current_mode.txt", "r") as f:
+                current_mode = f.read().strip().lower()
+        except:
+            current_mode = None
+        choices = [mode for mode in VALID_MODES if mode != current_mode]
+        new_mode = random.choice(choices)
+        with open("current_mode.txt", "w") as f:
+            f.write(new_mode)
+        current_mode_cache = new_mode
+        last_moodroll_time = now
+        await ctx.send(f"🎲 Mood roll! ZoroTheCaster is now in **{new_mode.upper()}** mode!")
+
+    @commands.command(name="nextroll")
+    async def nextroll(self, ctx):
+        global last_moodroll_time
+        now = time.time()
+        remaining = int(MOODROLL_COOLDOWN - (now - last_moodroll_time))
+        if remaining <= 0:
+            await ctx.send("🎲 `!moodroll` is ready to use!")
+        else:
+            await ctx.send(f"⏳ Next mood roll available in {remaining} seconds.")
 
     @commands.command(name="pause")
     async def pause_commentator(self, ctx):
@@ -1029,6 +1087,7 @@ class ZoroTheCasterBot(commands.Bot):
 
     async def personality_voting_timer(self):
         global voted_users
+        global current_mode_cache  # ✅ Add this
         previous_mode = get_current_mode()
         while True:
             await asyncio.sleep(VOTING_DURATION)
@@ -1037,6 +1096,7 @@ class ZoroTheCasterBot(commands.Bot):
                 new_mode, count = most_voted
                 with open("current_mode.txt", "w") as f:
                     f.write(new_mode)
+                current_mode_cache = new_mode  # ✅ Update the cache
                 await self.connected_channels[0].send(
                     f"✨ Voting closed! Winning AI personality: **{new_mode.upper()}** with {count} votes!")
                 # ✅ Only announce if mode actually changed
@@ -1052,13 +1112,38 @@ class ZoroTheCasterBot(commands.Bot):
             voted_users.clear()  # ✅ Reset voted users for new round
             await self.connected_channels[0].send("🔄 Votes have been reset. Start voting again!")
 
+    async def auto_mood_loop(self):
+        global last_moodroll_time
+        global current_mode_cache
+        await asyncio.sleep(10)  # initial delay after startup
+        while True:
+            await asyncio.sleep(MOOD_AUTO_SWITCH_INTERVAL)
+            try:
+                with open("current_mode.txt", "r") as f:
+                    current_mode = f.read().strip().lower()
+            except:
+                current_mode = None
+            choices = [mode for mode in VALID_MODES if mode != current_mode]
+            new_mode = random.choice(choices)
+            with open("current_mode.txt", "w") as f:
+                f.write(new_mode)
+            current_mode_cache = new_mode  # ✅ update the in-memory cache
+            last_moodroll_time = time.time()  # reset cooldown to prevent immediate roll after auto switch
+            await self.connected_channels[0].send(
+                f"🔁 Auto-switch activated! ZoroTheCaster is now in **{new_mode.upper()}** mode!")
+            #if tts_queue.empty():
+                #await safe_add_to_tts_queue(f"The mood has changed to {new_mode} mode.")
+            #else:
+                #print("[TTS] Skipping mood voice line — TTS is busy.")
+
+
     async def periodic_commands_reminder(self, interval=600):  # 600 sec = 10 minutes
         while True:
             try:
                 if self.connected_channels:
                     commands_text = (
-                        "🤖 Commands: "
-                        "🗳 `!vote` | 📊 `!results` | 🧠 `!askai` | 📚 `!askaihelp` | ⏱ `!cooldown` | 📬 `!queue` | 📈 `!status` | 📄 `!commands` "
+                        "🤖 Commands: 🗳 `!vote` | 📊 `!results` | 🧠 `!askai` | 📚 `!askaihelp` |  "
+                        "⏱ `!cooldown` | 📬 `!queue` | 🎲 `!moodroll` | ⏳ `!nextroll` | 📈 `!status` | 📄 `!commands` "
                     )
                     await self.connected_channels[0].send(commands_text)
             except Exception as e:
@@ -1070,6 +1155,7 @@ class ZoroTheCasterBot(commands.Bot):
 if __name__ == "__main__":
     debug_imports()
     setup_shutdown_hooks(bot_instance=None, executor=tts_executor)
+    load_initial_mode()  # ✅ This loads the personality from file at startup
     # 🔧 Force item prices to load (and cache file to be created)
     #ensure_item_prices_loaded()
     #print("[DEBUG] Item prices loaded:", len(ITEM_PRICES), "items")

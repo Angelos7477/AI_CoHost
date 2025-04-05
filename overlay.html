@@ -55,18 +55,29 @@
     }
 
     #commentary-overlay {
-      top: 5%;
+      top: 7%;
       left: 50%;
       transform: translateX(-50%);
     }
 
     #event-overlay {
-      top: 5%;
+      top: 7%;
       left: 5%;
     }
+    #personality-icon {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 64px;
+      height: 64px;
+      z-index: 1000;
+    }
+
   </style>
 </head>
 <body>
+  <img id="personality-icon" src="icons/default.png" alt="Personality Icon" />
 
   <div id="askai-overlay">❓ Waiting for AskAI...</div>
   <div id="commentary-overlay">🎙️ Waiting for Commentary...</div>
@@ -79,6 +90,21 @@
     const commentaryDiv = document.getElementById("commentary-overlay");
     const eventDiv = document.getElementById("event-overlay");
     const costDiv = document.getElementById("cost-overlay");
+    /*Personality icons*/
+    const personalityIcon = document.getElementById("personality-icon");
+    const iconMap = {
+      "troll": "icons/troll.png",
+      "smartass": "icons/smartass.png",
+      "tsundere": "icons/tsundere.png",
+      "edgelord": "icons/edgelord.png",
+      "shakespeare": "icons/shakespeare.png",
+      "genz": "icons/genz.png",
+      "coach": "icons/coach.png",
+      "hype": "icons/hype.png",
+      "wholesome": "icons/wholesome.png",
+      "sarcastic": "icons/sarcastic.png"
+    };
+
 
     let ws = null;
     let reconnectTimeout = null;
@@ -152,6 +178,19 @@
         }, 5000);
       }
     }
+    /*personality functions. it reads from current_mode.txt and updates every 3 seconds*/
+    async function updatePersonalityIcon() {
+      try {
+        const res = await fetch("current_mode.txt?_=" + new Date().getTime());
+        const mode = (await res.text()).trim().toLowerCase();
+        const icon = iconMap[mode] || "icons/default.png";
+        personalityIcon.src = icon;
+      } catch (e) {
+        console.error("[HTML] Could not fetch personality mode:", e);
+      }
+    }
+    setInterval(updatePersonalityIcon, 3000);
+    updatePersonalityIcon();
 
     connectWS();
   </script>
