@@ -33,7 +33,12 @@ class HPDropTrigger(GameTrigger):
         drop = ((prev_hp - curr_hp) / max(prev_hp, 1)) * 100
         if drop >= self.threshold:
             self.last_trigger_time = now
-            return f"🩸 Player took a big hit! Lost {int(drop)}% and is now critically low at {curr_hp} HP."
+            messages = [
+                f"⚠️ Massive damage incoming! Took a brutal {int(drop)}% hit — only {curr_hp} HP left!",
+                f"Oof, you planning to tank with that {curr_hp} HP left? Took a {int(drop)}% smack to the face.",
+                f"💀 HP bar just got *Thanos snapped* — down {int(drop)}%! {curr_hp} HP is a lifestyle, not a number."
+            ]
+            return random.choice(messages)
         return None
 
 
@@ -49,7 +54,12 @@ class CSMilestoneTrigger(GameTrigger):
         milestone = (cs // self.step) * self.step
         if milestone > self.last_milestone:
             self.last_milestone = milestone
-            return f"CS milestone reached — {milestone} minions down!"
+            messages = [
+                f"🎯 CS check: {milestone} minions farmed. Clean mechanics!",
+                f"💼 Farming like a pro — {milestone} CS and counting.",
+                f"🌾 That’s {milestone} minions in the dirt. Gold stacking on point!"
+            ]
+            return random.choice(messages)
         return None
 
 
@@ -68,19 +78,36 @@ class KillCountTrigger(GameTrigger):
         # Basic kill delta
         if kills > self.last_kills:
             diff = kills - self.last_kills
-            messages.append(f"Player scored {diff} new kill(s)!")
+            kill_lines = [
+                f"💀 Picked up {diff} kill{'s' if diff > 1 else ''}! Keep the pressure on!",
+                f"🧨 Boom! {diff} more on the scoreboard.",
+                f"⚔️ Racking up kills — {diff} just now!"
+            ]
+            messages.append(random.choice(kill_lines))
             self.last_kills = kills
         # Check kill milestones
         for milestone in self.kill_milestones:
             if kills >= milestone and milestone not in self.triggered_milestones:
                 self.triggered_milestones.add(milestone)
                 if milestone == 5:
-                    messages.append("🔥 You're on a hot streak! 5 kills!")
+                    lines = [
+                        "🔥 You're on a hot streak! 5 kills!",
+                        "⚡ Dominating! 5 takedowns already!",
+                        "💣 Mid-game menace — 5 kills in!"
+                    ]
                 elif milestone == 10:
-                    messages.append("💥 10 kills! You're carrying this game!")
+                    lines = [
+                        "💥 Double digits! 10 kills and climbing!",
+                        "🛡️ Unstoppable — 10 enemies down.",
+                        "🏹 10 kills? That’s main character energy."
+                    ]
                 elif milestone == 15:
-                    messages.append("👑 Absolute domination — 15 kills and counting!")
-
+                    lines = [
+                        "👑 Absolute domination — 15 kills and counting!",
+                        "🎯 15 confirmed kills. Are you even human?",
+                        "🚀 You’re breaking the scoreboard — 15 kills!"
+                    ]
+                messages.append(random.choice(lines))
         return "\n".join(messages) if messages else None
 
 
@@ -95,13 +122,16 @@ class DeathTrigger(GameTrigger):
         if deaths > self.last_deaths:
             diff = deaths - self.last_deaths
             self.last_deaths = deaths
-            messages = [
-                f"Oof... Player just died {diff} time(s).",
-                f"Another death on the board. That’s {deaths} now!",
-                f"Tough luck! Player went down again.",
-                f"The caster's getting worried — another death logged."
+            death_lines = [
+                f"💀 Oof... went down again. That’s {deaths} total.",
+                f"☠️ RIP! Death #{deaths}. Shake it off!",
+                f"⚰️ Another one bites the dust. Count: {deaths}.",
+                f"📉 That's {deaths} deaths... let’s turn this around.",
+                f"🔻 Things are getting rough. {deaths} deaths now.",
+                f"😵‍💫 You're feeding faster than the minions.",
+                f"😬 Yikes! {deaths} deaths. Time for a strategy shift?"
             ]
-            return random.choice(messages)
+            return random.choice(death_lines)
         return None
 
 class GoldThresholdTrigger:
@@ -116,7 +146,14 @@ class GoldThresholdTrigger:
         if gold >= 3500 and previous.get("gold", 0) < 3500:
             if (now - self.last_triggered) >= self.cooldown:
                 self.last_triggered = now
-                return "You have over 3.5k gold! Time to consider recalling and spending it."
+                messages = [
+                    "💰 You're sitting on a mountain of gold! Time to shop before they catch you out.",
+                    "🛍️ 3.5k+ gold? Go treat yourself to some serious power-ups!",
+                    "🪙 You're rich! Recall and spend that gold before it's too late.",
+                    "⚠️ Holding onto 3.5k gold is risky — spend it before you donate it in a teamfight.",
+                    "📦 That's enough gold for a big item spike. Don't forget to cash in!"
+                ]
+                return random.choice(messages)
         return None
 
 class FirstBloodTrigger:
