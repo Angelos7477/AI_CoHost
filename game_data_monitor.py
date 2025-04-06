@@ -1,3 +1,4 @@
+#game_data_monitor.py
 import asyncio
 import json
 import time
@@ -5,7 +6,7 @@ import requests
 
 # 💡 Adjustable polling interval (every 3s)
 POLL_INTERVAL = 3
-LIVE_CLIENT_URL = "http://127.0.0.1:2999/liveclientdata/allgamedata"
+LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 
 # Basic state snapshot for change detection
 previous_state = {

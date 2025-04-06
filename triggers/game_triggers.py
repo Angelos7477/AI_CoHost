@@ -232,13 +232,12 @@ class DragonKillTrigger:
 
 
 class MultikillEventTrigger(GameTrigger):
-    """Trigger when any multikill happens, reacting differently for you, allies, and enemies."""
     def __init__(self, your_name: str, your_team: str = None):
         self.your_name = your_name
-        self.last_seen_event_time = 0
-        self.your_team = your_team  # optional, fallback to current_data
+        self.your_team = your_team
+        self.last_seen_event_ids = set()  # ✅ Track handled EventIDs
     def reset(self):
-        self.last_seen_event_time = 0
+        self.last_seen_event_ids.clear()
     def check(self, current_data, previous_data):
         events = current_data.get("events", {}).get("Events", [])
         all_players = current_data.get("allPlayers", [])
@@ -246,18 +245,21 @@ class MultikillEventTrigger(GameTrigger):
         for event in reversed(events):
             if event.get("EventName") != "Multikill":
                 continue
+            event_id = event.get("EventID")
+            if not event_id or event_id in self.last_seen_event_ids:
+                continue  # ✅ Already seen or missing ID
+            self.last_seen_event_ids.add(event_id)  # ✅ Mark as seen
+            # ✅ Memory cleanup: trim if too large
+            if len(self.last_seen_event_ids) > 100:
+                self.last_seen_event_ids = set(list(self.last_seen_event_ids)[-50:])
             killer = event.get("KillerName")
             streak = event.get("KillStreak", 2)
-            event_time = event.get("EventTime", 0)
-            if not killer or event_time <= self.last_seen_event_time:
+            if not killer:
                 continue
-            self.last_seen_event_time = event_time
-            # 🔎 Figure out who this player is
             killer_player = next((p for p in all_players if p.get("summonerName") == killer), None)
             if not killer_player:
                 continue
             team = killer_player.get("team", "UNKNOWN")
-            # 🎯 Respond differently based on relationship
             if killer == self.your_name:
                 return self._message_for_streak(streak, "self")
             elif team == your_team:

@@ -73,7 +73,7 @@ tts_queue = asyncio.Queue()
 ASKAI_COOLDOWN_SECONDS = 40
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
-VOTING_DURATION = 180
+VOTING_DURATION = 300
 last_moodroll_time = 0  # Global cooldown timer
 MOODROLL_COOLDOWN = 60  # seconds
 askai_cooldowns = {}
@@ -1091,7 +1091,6 @@ class ZoroTheCasterBot(commands.Bot):
         global voted_users
         global current_mode_cache
         global last_moodroll_time
-        previous_mode = get_current_mode()
         await asyncio.sleep(10)  # Initial startup delay
         while True:
             await asyncio.sleep(VOTING_DURATION)
