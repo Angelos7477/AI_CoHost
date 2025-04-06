@@ -29,6 +29,7 @@ import json
 import random
 from utils.game_utils import estimate_team_gold,ensure_item_prices_loaded
 from game_data_monitor import set_callback, game_data_loop, generate_game_recap, get_previous_state, set_triggers
+from shared_state import previous_state
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -93,7 +94,6 @@ overlay_ws_task = None
 POLL_INTERVAL = 5
 LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 # Basic state snapshot for change detection
-previous_state = {}
 triggers = [
     HPDropTrigger(threshold_percent=35, min_current_hp=70, cooldown=30),
     #CSMilestoneTrigger(step=70),
@@ -365,10 +365,11 @@ async def clear_state_after_delay(delay_seconds=6):
     print("🧹 Delayed GameEnd cleanup triggered.")
     # Preserve game_ended flag
     game_ended = previous_state.get("game_ended", False)
+    print("[Before Clear] previous_state =", previous_state)  # 🔍 Add this line for sanity check
     previous_state.clear()
     if game_ended:
         previous_state["game_ended"] = True  # Restore it for AskAI checks
-        print("[After Clear] previous_state =", previous_state)
+        print("[After Clear] Restored game_ended flag")
     for trigger in triggers:
         if hasattr(trigger, "reset"):
             trigger.reset()

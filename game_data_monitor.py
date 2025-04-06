@@ -6,10 +6,10 @@ import time
 import json
 from utils.game_utils import estimate_team_gold
 from triggers.game_triggers import MultikillEventTrigger
+from shared_state import previous_state
 
 POLL_INTERVAL = 5
 LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
-previous_state = {}
 triggers = []
 callback_from_zorobot = None
 
