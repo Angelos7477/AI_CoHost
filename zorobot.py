@@ -27,7 +27,8 @@ from elevenlabs.client import ElevenLabs
 from elevenlabs import play, VoiceSettings
 import json
 import random
-
+from utils.game_utils import estimate_team_gold,ensure_item_prices_loaded
+from game_data_monitor import set_callback, game_data_loop, generate_game_recap, get_previous_state, set_triggers
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -115,9 +116,6 @@ GAME_TTS_COOLDOWN = 4  # seconds
 last_game_tts_time = 0  # global timestamp tracker
 AUTO_RECAP_INTERVAL = 600  # every 10 minutes
 
-ITEM_CACHE_FILE = "cached_item_prices.json"
-ITEM_PRICES = None  # declare globally
-
 # === Utility Functions ===
 def debug_imports():
     print("\n=== DEBUG: Import Origins ===")
@@ -142,31 +140,6 @@ def debug_imports():
     except Exception as e:
         print("❌ Error checking OpenAI client:", e)
     print("=== End of Import Debug ===\n")
-
-def load_item_prices():
-    url = "https://ddragon.leagueoflegends.com/cdn/15.7.1/data/en_US/item.json"
-    response = requests.get(url)
-    data = response.json()
-    prices = {int(k): v["gold"]["total"] for k, v in data["data"].items()}
-    # ✅ Save to disk cache
-    with open(ITEM_CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(prices, f)
-    return prices
-
-def load_item_prices_from_cache():
-    try:
-        if os.path.exists(ITEM_CACHE_FILE):
-            with open(ITEM_CACHE_FILE, "r", encoding="utf-8") as f:
-                return {int(k): v for k, v in json.load(f).items()}
-    except Exception as e:
-        print("[ItemCache] Failed to load item cache:", e)
-    return None
-
-def ensure_item_prices_loaded():
-    global ITEM_PRICES
-    if ITEM_PRICES is None:
-        ITEM_PRICES = load_item_prices_from_cache() or load_item_prices()
-    return ITEM_PRICES
 
 def get_current_mode():
     global current_mode_cache
@@ -374,275 +347,67 @@ def log_merged_prompt(text: str):
     timestamp = datetime.now(timezone.utc).isoformat()
     with open("logs/merged_prompts.log", "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {text.strip()}\n")
-
-def generate_game_recap(all_data, you, active_player, last_snapshot=None, dragon_kills=None):
-    your_name = you.get("summonerName", "You")
-    scores = you.get("scores", {})
-    gold = active_player.get("currentGold", 0)
-    team = you.get("team", "ORDER")
-    all_players = all_data.get("allPlayers", [])
-    item_gold = sum(item.get("price", 0) * item.get("count", 1) for item in you.get("items", []))
-    your_team = [p for p in all_players if p.get("team") == team]
-    enemy_team = [p for p in all_players if p.get("team") != team]
-    # Team kills
-    your_team_kills = sum(p.get("scores", {}).get("kills", 0) for p in your_team)
-    enemy_team_kills = sum(p.get("scores", {}).get("kills", 0) for p in enemy_team)
-    # Team gold
-    teams_gold = estimate_team_gold(all_players)
-    your_team_gold = teams_gold.get(team, 0)
-    enemy_team_gold = sum(v for k, v in teams_gold.items() if k != team)
-    gold_diff = your_team_gold - enemy_team_gold
-    status = "ahead" if gold_diff > 0 else "behind"
-    # Recap changes
-    recap_lines = []
-    if last_snapshot:
-        delta_kills = scores.get("kills", 0) - last_snapshot.get("kills", 0)
-        delta_deaths = scores.get("deaths", 0) - last_snapshot.get("deaths", 0)
-        delta_assists = scores.get("assists", 0) - last_snapshot.get("assists", 0)
-        delta_cs = scores.get("creepScore", 0) - last_snapshot.get("cs", 0)
-        if delta_kills > 0:
-            recap_lines.append(f"⚔️ You scored {delta_kills} kill(s)")
-        if delta_deaths > 0:
-            recap_lines.append(f"💀 You died {delta_deaths} time(s)")
-        if delta_assists > 0:
-            recap_lines.append(f"🧩 You assisted {delta_assists} time(s)")
-        if delta_cs > 0:
-            current_time = time.time()
-            prev_time = last_snapshot.get("timestamp", current_time)
-            delta_time = current_time - prev_time
-            if delta_time >= 30:  # only calculate if > 30 seconds passed
-                cs_per_min = delta_cs / (delta_time / 60)
-                recap_lines.append(f"🐸 You farmed {delta_cs} CS ({cs_per_min:.1f}/min)")
-            else:
-                recap_lines.append(f"🐸 You farmed {delta_cs} CS")
-        # Optional: detect item changes
-        prev_items = {item["displayName"] for item in last_snapshot.get("items", [])}
-        curr_items = {item["displayName"] for item in you.get("items", [])}
-        new_items = curr_items - prev_items
-        if new_items:
-            item_list = ", ".join(new_items)
-            recap_lines.append(f"🛒 New items: {item_list}")
-    # ✅ New: dragon check
-        prev_dragons = last_snapshot.get("dragon_kills", {}).get(team, 0)
-        curr_dragons = dragon_kills.get(team, 0)
-        if curr_dragons > prev_dragons:
-            recap_lines.append(f"🔥 Your team secured {curr_dragons - prev_dragons} dragon(s)!")
-    else:
-        recap_lines.append("📡 First recap of the match.")
-    summary = (
-        f"{your_name} is now {scores.get('kills', 0)}/{scores.get('deaths', 0)}/"
-        f"{scores.get('assists', 0)} with {scores.get('creepScore', 0)} CS and "
-        f"{gold:.0f} gold. You've spent {item_gold:,} gold on items. "
-        f"Your team has {your_team_kills} kills vs {enemy_team_kills}. "
-        f"You're {status} by {abs(gold_diff):,} gold in items."
-    )
-    return "Since the last update:\n" + "\n".join(recap_lines) + "\n" + summary
-
-def estimate_team_gold(players):
-    ensure_item_prices_loaded()
-    team_gold = {}
-    for player in players:
-        team = player.get("team", "UNKNOWN")
-        items = player.get("items", [])
-        total = 0
-        for item in items:
-            item_id = item.get("itemID")
-            real_price = ITEM_PRICES.get(item_id, 0)
-            total += real_price * item.get("count", 1)
-        team_gold[team] = team_gold.get(team, 0) + total
-    return team_gold
+def log_recap_prompt(text: str):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with open("logs/recaps.log", "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {text.strip()}\n")
+def log_askai_commentary_prompt(text: str):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with open("logs/askai_commentary.log", "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {text.strip()}\n")
 
 def is_game_related(question: str):
     q = question.lower()
     return any(word in q for word in ["winnable", "win", "lose", "score", "comeback", "game", "match", "gold", "kills", "cs", "status"])
 
-async def game_data_loop():
-    global last_game_tts_time  # 🔥 Add this line!
-    print("🕹️ Game Data Monitor started.")
-    #initialized = False
-    while True:
-        try:
-            response = requests.get(LIVE_CLIENT_URL, timeout=5, verify=False)
-            if response.status_code != 200:
-                await asyncio.sleep(POLL_INTERVAL)
-                continue
-            data = response.json()
-            # 🟦 Get your Riot ID from activePlayer
-            active_player = data.get("activePlayer", {})
-            # ❌ Game ended? Clear previous_state
-            if not active_player or not active_player.get("championStats"):
-                if previous_state.get("initialized"):
-                    print("🏁 Game ended. Clearing state.")
-                    previous_state.clear()
-                for trigger in triggers:
-                    if hasattr(trigger, "reset"):
-                        trigger.reset()
-                await asyncio.sleep(POLL_INTERVAL)
-                continue
-            riot_id = active_player.get("riotId", None)
-            events = data.get("events", {}).get("Events", [])
-            dragon_kill_events = [e for e in events if e.get("EventName") == "DragonKill"]
-            # 🟦 Get your HP from activePlayer (HP is only here!)
-            hp = active_player.get("championStats", {}).get("currentHealth", 0)
-            current_gold = active_player.get("currentGold", 0)
-            # 🟦 Match your full player data in allPlayers[] by riotId
-            all_players = data.get("allPlayers", [])
-            your_player_data = next((p for p in all_players if p.get("riotId") == riot_id), None)
-            if not your_player_data:
-                print("[GameLoop] ⚠️ Could not find matching player in allPlayers.")
-                await asyncio.sleep(POLL_INTERVAL)
-                continue
-            # ✅ Extract scores (kills, deaths, assists, cs)
-            scores = your_player_data.get("scores", {})
-            kills = scores.get("kills", 0)
-            deaths = scores.get("deaths", 0)
-            assists = scores.get("assists", 0)
-            cs = scores.get("creepScore", 0)
-            item_gold = sum(item.get("price", 0) * item.get("count", 1) for item in your_player_data.get("items", []))
-            your_team = your_player_data.get("team", "ORDER")
-            total_kills = sum(p.get("scores", {}).get("kills", 0) for p in all_players)
-            teams_gold = estimate_team_gold(all_players)
-            your_team_gold = teams_gold.get(your_team, 0)
-            enemy_team_gold = sum(v for k, v in teams_gold.items() if k != your_team)
-            print(f"[Gold Debug] ORDER total gold: {teams_gold.get('ORDER', 0)}")
-            print(f"[Gold Debug] CHAOS total gold: {teams_gold.get('CHAOS', 0)}")
-            gold_diff = your_team_gold - enemy_team_gold
-            dragon_kills = {"ORDER": 0, "CHAOS": 0}
-            for e in dragon_kill_events:
-                killer = e.get("KillerName", "")
-                killer_player = next((p for p in all_players if p.get("summonerName") == killer), None)
-                if killer_player:
-                    team = killer_player.get("team", "UNKNOWN")
-                    dragon_kills[team] += 1
-            timestamp_now = time.time()
-            game_time_seconds = data.get("gameData", {}).get("gameTime", 0)
-            # 🆕 Reset logic: detect new game if gameTime resets
-            if game_time_seconds < 10 and previous_state.get("last_game_time", 9999) > 30:
-                print("🔁 New game detected. Resetting previous_state.")
-                previous_state.clear()
-                for trigger in triggers:
-                    if hasattr(trigger, "reset"):
-                        trigger.reset()
-                await asyncio.sleep(POLL_INTERVAL)
-                continue
-            previous_state["last_game_time"] = game_time_seconds  # always track current gameTime
-            # 🆕 Initialize state from current game snapshot
-            if not previous_state.get("initialized"):
-                previous_state.update({
-                    "kills": kills,
-                    "deaths": deaths,
-                    "assists": assists,
-                    "cs": cs,
-                    "last_hp": hp,
-                    "gold": current_gold,  # ✅ add this
-                    "item_gold": item_gold,  # ✅ Add this
-                    "last_damage_timestamp": timestamp_now,
-                    "last_trigger_time": timestamp_now,
-                    "last_cs_milestone": (cs // 70) * 70,
-                    "total_kills": total_kills,
-                    "your_team": your_team,
-                    "dragon_kills": dragon_kills,
-                    "last_game_time": game_time_seconds,  # ✅ Add this here
-                    "initialized": True
-                })
-                # 🎯 Dynamically insert your name into the MultikillEventTrigger
-                if not previous_state.get("multikill_trigger_set"):
-                    your_name = your_player_data.get("summonerName")
-                    triggers.append(MultikillEventTrigger(your_name=your_name))
-                    previous_state["multikill_trigger_set"] = True
-                print("📡 Initialized game_data_loop with current stats.")
-                await asyncio.sleep(POLL_INTERVAL)
-                continue
-            # ✅ Build current_data dict to pass into triggers
-            current_data = {
-                "hp": hp,
-                "cs": cs,
-                "kills": kills,
-                "deaths": deaths,
-                "last_hp": hp,
-                "gold": current_gold,  # ✅ add this
-                "item_gold": item_gold,  # ✅ Add this
-                "assists": assists,
-                "timestamp": timestamp_now,
-                "total_kills": total_kills,
-                "your_team": your_team,
-                "dragon_kills": dragon_kills,
-                "last_game_time": game_time_seconds,  # ✅ Add this line
-                "gold_diff": gold_diff,
-                "allPlayers": all_players,  # ✅ Now triggers can access full player info!
-                "events": data.get("events", {})  # ✅ Add this!
+async def clear_state_after_delay(delay_seconds=6):
+    await asyncio.sleep(delay_seconds)
+    print("🧹 Delayed GameEnd cleanup triggered.")
+    # Preserve game_ended flag
+    game_ended = previous_state.get("game_ended", False)
+    previous_state.clear()
+    if game_ended:
+        previous_state["game_ended"] = True  # Restore it for AskAI checks
+        print("[After Clear] previous_state =", previous_state)
+    for trigger in triggers:
+        if hasattr(trigger, "reset"):
+            trigger.reset()
+
+def handle_game_data(data, your_player_data, current_data, merged_results):
+    global last_game_tts_time
+    timestamp_now = time.time()
+    game_time_seconds = current_data["last_game_time"]
+    # ✅ Now let TTS play as usual
+    if merged_results and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
+        combined_prompt = "Commentate on the current game:\n" + "\n".join(merged_results)
+        log_merged_prompt(combined_prompt)
+        mode = get_current_mode()
+        ai_text = get_ai_response(combined_prompt, mode)
+        asyncio.create_task(safe_add_to_tts_queue(("game", "GameMonitor", ai_text)))
+        last_game_tts_time = timestamp_now
+        # ✅ After sending TTS, check if game ended and mark state
+        if any("Game over" in msg for msg in merged_results):
+            if previous_state.get("game_ended") is not True:
+                previous_state["game_ended"] = True
+                print("🧹 GameEnd detected, starting delayed cleanup...")
+                asyncio.create_task(clear_state_after_delay())
+    # Recap logic
+    if (timestamp_now - previous_state.get("last_recap_time", 0)) >= AUTO_RECAP_INTERVAL:
+        if game_time_seconds < 300:
+            print("⏳ Skipping early-game recap.")
+            return
+        last_snapshot = previous_state.get("last_recap_snapshot") or previous_state.copy()
+        recap_text = generate_game_recap(data, your_player_data, data.get("activePlayer", {}), last_snapshot, current_data["dragon_kills"])
+        if recap_text:
+            recap_prompt = "Give a short, energetic recap of the current game:\n" + recap_text
+            log_recap_prompt(recap_prompt)  # 🧼 New log file!
+            ai_text = get_ai_response(recap_prompt, get_current_mode())
+            asyncio.create_task(safe_add_to_tts_queue(("game", "GameRecap", ai_text)))
+            previous_state["last_recap_time"] = timestamp_now
+            previous_state["last_recap_snapshot"] = {
+                **current_data,
+                "items": your_player_data.get("items", [])
             }
-            # Copy current_data just for debugging purposes
-            debug_data = current_data.copy()
-            debug_data.pop("allPlayers", None)
-            debug_data.pop("events", None)
-            print(f"[GameLoop] current_data (clean): {json.dumps(debug_data, indent=2)}")
-            # ✅ Collect all triggered messages
-            merged_results = []
-            for trigger in triggers:
-                result = trigger.check(current_data, previous_state)
-                if result:
-                    merged_results.append(result)
-            # ✅ If there are any events, and cooldown passed, send single merged AI prompt
-            if merged_results and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
-                combined_prompt = "Commentate on the current game:\n" + "\n".join(merged_results)
-                log_merged_prompt(combined_prompt)
-                mode = get_current_mode()
-                ai_text = get_ai_response(combined_prompt, mode)
-                await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
-                last_game_tts_time = timestamp_now
-            # ✅ Auto recap every X seconds (e.g. 180s)
-            if (timestamp_now - previous_state.get("last_recap_time", 0)) >= AUTO_RECAP_INTERVAL:
-                    # 🛑 Skip recap if we're too early in the game
-                if game_time_seconds < 300:
-                    print("⏳ Skipping early-game recap (still in spawn phase).")
-                    await asyncio.sleep(POLL_INTERVAL)
-                    continue
-                last_snapshot = previous_state.get("last_recap_snapshot")
-                if not last_snapshot:
-                    last_snapshot = previous_state.copy()
-                recap_text = generate_game_recap(data, your_player_data, active_player, last_snapshot, dragon_kills)
-                recap_text = "Give a short, energetic recap of the current game:\n" + recap_text
-                if recap_text:
-                    ai_text = get_ai_response(recap_text, get_current_mode())
-                    await safe_add_to_tts_queue(("game", "GameRecap", ai_text))
-                    previous_state["last_recap_time"] = timestamp_now
-                    previous_state["last_recap_snapshot"] = {
-                        "kills": kills,
-                        "deaths": deaths,
-                        "assists": assists,
-                        "cs": cs,
-                        "items": your_player_data.get("items", []),
-                        "total_kills": total_kills,
-                        "your_team": your_team,
-                        "dragon_kills": dragon_kills,
-                        "gold": current_gold,  # ✅ add this
-                        "item_gold": item_gold,  # ✅ Add this
-                        "timestamp": timestamp_now,
-                        "gold_diff": gold_diff,
-                        "allPlayers": all_players,  # ✅ Now triggers can access full player info!
-                        "events": data.get("events", {})  # ✅ Add this!
-                    }
-            # ✅ Update previous state
-            previous_state.update({
-                "kills": kills,
-                "deaths": deaths,
-                "assists": assists,
-                "cs": cs,
-                "last_hp": hp,
-                "total_kills": total_kills,
-                "your_team": your_team,
-                "dragon_kills": dragon_kills,
-                "gold": current_gold,  # ✅ add this
-                "item_gold": item_gold,  # ✅ Add this
-                "last_game_time": game_time_seconds,  # ✅ Add this line
-                "gold_diff": gold_diff,
-                "allPlayers": all_players,  # ✅ Now triggers can access full player info!
-                "events": data.get("events", {}),  # ✅ Add this!
-            })
-        except Exception as e:
-            print(f"[GameMonitor Error]: {e}")
-        await asyncio.sleep(POLL_INTERVAL)
 
 # === AI Commentator Mode ===
 async def start_commentator_mode(interval_sec=60):
@@ -1031,8 +796,11 @@ class ZoroTheCasterBot(commands.Bot):
         timestamp = datetime.now(timezone.utc).isoformat()
         with open("logs/askai_log.txt", "a", encoding="utf-8") as log_file:
             log_file.write(f"[{timestamp}] {user}: {question}\n")
-        if "commentate" in question.lower() or "comentate" in question.lower() or "commentary" in question.lower():
-            full_prompt = f"Commentate on the current game:\n{self.build_game_context(previous_state)}\n\n🧠 {user} asked: {question}"
+        if "commentate" in question.lower():
+            current_state = get_previous_state()
+            full_prompt = f"Commentate on the current game:\n{self.build_game_context(current_state)}\n\n🧠 {user} asked: {question}"
+            print("[ASKAI] current_state snapshot:", json.dumps(current_state, indent=2))
+            log_askai_commentary_prompt(full_prompt)
         else:
             full_prompt = f"{user} asked: {question}"
         await askai_queue.put((user, full_prompt))
@@ -1072,8 +840,9 @@ class ZoroTheCasterBot(commands.Bot):
             print(f"❌ Chat send error: {e}")
 
     def build_game_context(self, state):
-        if not state or "kills" not in state:
-            return "No game data available right now."
+        print("[ASKAI] current state for commentary:", state)
+        if not state or "kills" not in state or state.get("game_ended"):
+            return "🕹️ No game in progress. Ask again once the battle begins!"
         k = state.get("kills", 0)
         d = state.get("deaths", 0)
         a = state.get("assists", 0)
@@ -1136,7 +905,7 @@ class ZoroTheCasterBot(commands.Bot):
 # === Run the Bot ===
 if __name__ == "__main__":
     debug_imports()
-    setup_shutdown_hooks(bot_instance=None, executor=tts_executor)
+    #setup_shutdown_hooks(bot_instance=None, executor=tts_executor)
     load_initial_mode()  # ✅ This loads the personality from file at startup
     # 🔧 Force item prices to load (and cache file to be created)
     #ensure_item_prices_loaded()
@@ -1145,12 +914,13 @@ if __name__ == "__main__":
         # Start WebSocket overlay server
         global overlay_ws_task
         overlay_ws_task = asyncio.create_task(start_overlay_ws_server())
-        # ✅ Start Game Data Monitor (new line here!)
+        set_triggers(triggers)  # ✅ This sends your trigger list to game_data_monitor
+        set_callback(handle_game_data)  # ✅ now it's set just before the loop starts
         asyncio.create_task(game_data_loop())
         # Start the Twitch bot
         bot = ZoroTheCasterBot()
         global bot_instance
         bot_instance = bot
-        setup_shutdown_hooks(bot_instance=bot, executor=tts_executor)
+        setup_shutdown_hooks(bot_instance=bot, executor=tts_executor)  
         await bot.start()
     asyncio.run(startup_tasks())

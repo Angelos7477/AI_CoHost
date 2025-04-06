@@ -286,8 +286,10 @@ class GameEndTrigger(GameTrigger):
     """Trigger at end of game with win/loss recap."""
     def __init__(self):
         self.triggered = False
+        self.result = None
     def reset(self):
         self.triggered = False
+        self.result = None
     def check(self, current_data, previous_data):
         if self.triggered:
             return None
@@ -295,8 +297,9 @@ class GameEndTrigger(GameTrigger):
         for event in reversed(events):
             if event.get("EventName") == "GameEnd":
                 self.triggered = True
-                result = event.get("Result", "Unknown")
-                return f"🎬 Game over! Result: {result.upper()}"
+                self.result = event.get("Result", "Unknown").upper()
+                print("[GameEndTrigger] GameEnd event detected")
+                return f"🎬 Game over! Result: {self.result}"
         return None
 
 class GoldDifferenceTrigger(GameTrigger):
