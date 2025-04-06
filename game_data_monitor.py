@@ -7,6 +7,7 @@ import json
 from utils.game_utils import estimate_team_gold
 from triggers.game_triggers import MultikillEventTrigger
 from shared_state import previous_state
+import copy
 
 POLL_INTERVAL = 5
 LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
@@ -19,7 +20,7 @@ def set_triggers(trigger_list):
     print(f"✅ Triggers loaded: {[t.__class__.__name__ for t in triggers]}")
 
 def get_previous_state():
-    return previous_state.copy()
+    return copy.deepcopy(previous_state)
 
 def generate_game_recap(all_data, you, active_player, last_snapshot=None, dragon_kills=None):
     your_name = you.get("summonerName", "You")
