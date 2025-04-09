@@ -167,7 +167,7 @@ def load_system_prompt(mode):
 def get_ai_response(prompt, mode):
     system_prompt = load_system_prompt(mode)
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",  #gpt-4o , gpt-3.5-turbo
+        model="gpt-4o",  #gpt-4o , gpt-3.5-turbo
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}

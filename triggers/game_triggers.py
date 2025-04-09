@@ -156,7 +156,7 @@ class GoldThresholdTrigger:
                 return random.choice(messages)
         return None
 
-class FirstBloodTrigger:
+class FirstBloodTrigger(GameTrigger):
     def __init__(self):
         self.triggered = False
     def reset(self):
@@ -164,12 +164,25 @@ class FirstBloodTrigger:
     def check(self, current, previous):
         if self.triggered:
             return None
-        # First blood = when total kills go from 0 to 1
-        total_kills_before = previous.get("total_kills", 0)
-        total_kills_now = current.get("total_kills", 0)
-        if total_kills_before == 0 and total_kills_now > 0:
-            self.triggered = True
-            return "🩸 First blood has been drawn! The fight begins!"
+        events = current.get("events", {}).get("Events", [])
+        your_name = current.get("your_name", "")
+        your_team = current.get("your_team", "ORDER")
+        all_players = current.get("allPlayers", [])
+        for event in events:
+            if event.get("EventName") == "ChampionKill":
+                killer = event.get("KillerName", "")
+                victim = event.get("VictimName", "")
+                killer_player = next((p for p in all_players if p.get("summonerName") == killer), None)
+                if not killer_player:
+                    continue  # skip unknown killer
+                killer_team = killer_player.get("team", "UNKNOWN")
+                self.triggered = True  # ✅ Mark as triggered
+                if killer == your_name:
+                    return f"🩸 First Blood is yours! You just took down {victim} — what a start!"
+                elif killer_team == your_team:
+                    return f"💥 First Blood for your team! {killer} struck first and got {victim}!"
+                else:
+                    return f"⚠️ First Blood goes to the enemy! {killer} eliminated {victim} early!"
         return None
 
 class DragonKillTrigger:
