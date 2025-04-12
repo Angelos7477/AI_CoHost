@@ -6,7 +6,7 @@ import time
 import json
 from utils.game_utils import estimate_team_gold,  power_score
 from triggers.game_triggers import MultikillEventTrigger,FeatsOfStrengthTrigger, StreakTrigger
-from shared_state import previous_state, player_ratings
+from shared_state import previous_state, player_ratings, inhib_respawn_timer, baron_expire, elder_expire
 import copy
 from overlay_push import push_power_scores
 
@@ -117,6 +117,11 @@ async def monitor_game_data(callback):
                 if previous_state.get("game_ended"):
                     print("✅ Clean disconnect after GameEnd. Final cleanup.")
                     previous_state.clear()
+                    inhib_respawn_timer["ORDER"].clear()
+                    inhib_respawn_timer["CHAOS"].clear()
+                    baron_expire.clear()
+                    elder_expire.clear()
+                    player_ratings.clear()
                     previous_state["game_ended"] = True  # So AskAI still sees "game is over"
                     for trigger in triggers:
                         if hasattr(trigger, "reset"):
@@ -161,6 +166,19 @@ async def monitor_game_data(callback):
                     if killer_player:
                         team = killer_player.get("team", "UNKNOWN")
                         dragon_kills[team] += 1
+                if e["EventName"] == "InhibKilled":
+                    team = get_team_of_killer(e, all_players)
+                    if team:
+                        respawn_time = e["EventTime"] + 300  # 5 minutes
+                        inhib_respawn_timer[team].append(respawn_time)
+                if e["EventName"] == "BaronKill":
+                    team = get_team_of_killer(e, all_players)
+                    if team:
+                        baron_expire[team] = e["EventTime"] + 180  # 3 minutes
+                if e["EventName"] == "ElderKill":
+                    team = get_team_of_killer(e, all_players)
+                    if team:
+                        elder_expire[team] = e["EventTime"] + 150  # 2.5 minutes
             # Inject streaks
             for player in all_players:
                 summoner_name = player.get("summonerName")
@@ -172,19 +190,19 @@ async def monitor_game_data(callback):
                 player_team_data = {
                     "dragons": dragon_kills.get(player_team, 0),
                     "dragon_soul": data.get("events", {}).get("DragonSoulTeam") == player_team,
-                    "elder_dragon": any(e["EventName"] == "ElderKill" and get_team_of_killer(e, all_players) == player_team for e in events),
-                    "baron_buff": any(e["EventName"] == "BaronKill" and get_team_of_killer(e, all_players) == player_team for e in events),
+                    "elder_dragon": elder_expire.get(player_team, 0) > game_time_seconds,
+                    "baron_buff": baron_expire.get(player_team, 0) > game_time_seconds,
                     "heralds": sum(1 for e in events if e["EventName"] == "HeraldKill" and get_team_of_killer(e, all_players) == player_team),
                     "atakan_buff": any(e["EventName"] == "AtakhanKill" and get_team_of_killer(e, all_players) == player_team for e in events),
                     "atakan_temp": sum(1 for e in events if e["EventName"] == "AtakhanKill" and get_team_of_killer(e, all_players) == player_team),
-                    "void_grubs": feats_trigger.voidgrub_objective_counts.get(player_team, 0),
+                    "void_grubs": sum(1 for e in events if e.get("EventName") == "HordeKill" and get_team_of_killer(e, all_players) == player_team),
                     "feats_of_strength": 1 if feats_trigger.get_triggered_team() == player_team else 0,
                     "towers": {
                         "tier1": sum(1 for e in events if e["EventName"] == "TurretKilled" and "T1" in e["TurretKilled"] and get_team_of_killer(e, all_players) == player_team ),
                         "tier2": sum(1 for e in events if e["EventName"] == "TurretKilled" and "T2" in e["TurretKilled"] and get_team_of_killer(e, all_players) == player_team),
                         "tier3": sum(1 for e in events if e["EventName"] == "TurretKilled" and "T3" in e["TurretKilled"] and get_team_of_killer(e, all_players) == player_team),
                     },
-                    "inhibitors_down": sum(1 for e in events if e["EventName"] == "InhibKilled" and get_team_of_killer(e, all_players) == player_team)
+                    "inhibitors_down": sum(1 for t in inhib_respawn_timer[player_team] if t > game_time_seconds)
                 }
                 lane_opponent = find_enemy_laner(player, all_players)  # You'll define this
                 score = power_score(player, enemy_laner=lane_opponent, team_data=player_team_data, game_time_minutes=game_time_minutes, verbose=True)
@@ -194,6 +212,11 @@ async def monitor_game_data(callback):
             if game_time_seconds < 10 and previous_state.get("last_game_time", 9999) > 30:
                 print("🔁 New game detected. Resetting state.")
                 previous_state.clear()
+                inhib_respawn_timer["ORDER"].clear()
+                inhib_respawn_timer["CHAOS"].clear()
+                baron_expire.clear()
+                elder_expire.clear()
+                player_ratings.clear()
                 for trigger in triggers:
                     if hasattr(trigger, "reset"):
                         trigger.reset()
@@ -218,6 +241,11 @@ async def monitor_game_data(callback):
                     "last_game_time": game_time_seconds,
                     "initialized": True,
                     "game_ended": False,  # ✅ Reset here too
+                    "buff_timers": {
+                        "baron_expire": baron_expire.copy(),
+                        "elder_expire": elder_expire.copy(),
+                        "inhib_respawn_timer": {k: list(v) for k, v in inhib_respawn_timer.items()},
+                    }
                 })
                 print("📡 Initialized game_data_loop with current stats.")
                 await asyncio.sleep(POLL_INTERVAL)
@@ -239,6 +267,11 @@ async def monitor_game_data(callback):
                 "last_game_time": game_time_seconds,
                 "gold_diff": gold_diff,
                 "allPlayers": all_players,
+                "buff_timers": {
+                    "baron_expire": baron_expire.copy(),
+                    "elder_expire": elder_expire.copy(),
+                    "inhib_respawn_timer": {k: list(v) for k, v in inhib_respawn_timer.items()},
+                },                
                 "events": data.get("events", {})
             }
             # Copy current_data just for debugging purposes

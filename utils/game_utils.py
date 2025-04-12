@@ -60,8 +60,6 @@ def power_score(player, enemy_laner=None, team_data=None, game_time_minutes=1, v
     MAX_LEVEL_SCORE = 90
     MAX_ITEM_SCORE = 90
     LEVEL_LEAD_SCORE_PER_LEVEL = 5
-    SNOWBALL_SCORE_PER_KILL = 1
-    SNOWBALL_MAX_KILLS = 10
     LEGENDARY_BONUS = 5
     DEATH_PENALTY_SCORE = 2
     CS_MAX_SCORE = 3
@@ -87,16 +85,19 @@ def power_score(player, enemy_laner=None, team_data=None, game_time_minutes=1, v
         score += lane_score
         debug_log.append(f"[{name}] Lane level lead {level_lead} → +{lane_score:.1f}")
     # 🔥 Kill streak
-    kill_streak = player.get("killStreak", 0)
-    snowball_score = min(kill_streak, SNOWBALL_MAX_KILLS) * SNOWBALL_SCORE_PER_KILL
-    if kill_streak >= 8:
-        snowball_score += LEGENDARY_BONUS
-        debug_log.append(f"[{name}] Legendary! Streak {kill_streak} → +{snowball_score:.1f}")
-    elif kill_streak > 0:
-        debug_log.append(f"[{name}] Kill streak {kill_streak} → +{snowball_score:.1f}")
-    score += snowball_score
-    # 💀 Death penalty
     deaths = player["scores"].get("deaths", 0)
+    kills = player["scores"].get("kills", 0)
+    assists = player["scores"].get("assists", 0)
+    kill_streak = player.get("killStreak", 0)
+    kda_ratio = (kills + assists) / max(deaths, 1)
+    kda_score = round(kda_ratio, 1)
+    score += kda_score
+    if kill_streak >= 8:
+        score += LEGENDARY_BONUS
+        debug_log.append(f"[{name}] KDA ({kills}+{assists})/{deaths} → +{kda_score} + Legendary Bonus → +{LEGENDARY_BONUS}")
+    elif kill_streak > 0:
+        debug_log.append(f"[{name}] KDA ({kills}+{assists})/{deaths} → +{kda_score}")
+    # 💀 Death penalty
     death_penalty = min(deaths * DEATH_PENALTY_SCORE, 20)
     score -= death_penalty
     debug_log.append(f"[{name}] Deaths {deaths} → -{death_penalty:.1f}")

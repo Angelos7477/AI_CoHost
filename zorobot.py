@@ -29,7 +29,7 @@ import json
 import random
 from utils.game_utils import estimate_team_gold,ensure_item_prices_loaded
 from game_data_monitor import set_callback, game_data_loop, generate_game_recap, get_previous_state, set_triggers, feats_trigger, streak_trigger
-from shared_state import previous_state
+from shared_state import previous_state,inhib_respawn_timer, baron_expire, elder_expire, player_ratings
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -366,6 +366,12 @@ async def clear_state_after_delay(delay_seconds=6):
     game_ended = previous_state.get("game_ended", False)
     print("[Before Clear] previous_state =", previous_state)  # 🔍 Add this line for sanity check
     previous_state.clear()
+    # Also clear buff/inhib timers
+    inhib_respawn_timer["ORDER"].clear()
+    inhib_respawn_timer["CHAOS"].clear()
+    baron_expire.clear()
+    elder_expire.clear()
+    player_ratings.clear()
     if game_ended:
         previous_state["game_ended"] = True  # Restore it for AskAI checks
         print("[After Clear] Restored game_ended flag")
@@ -626,7 +632,6 @@ class ZoroTheCasterBot(commands.Bot):
         if not ctx.author.is_broadcaster:
             await ctx.send("❌ Only the streamer can reset cooldowns.")
             return
-
         askai_cooldowns.clear()
         await ctx.send("✅ All !askai cooldowns have been reset by the streamer.")
 
