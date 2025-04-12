@@ -372,6 +372,8 @@ async def clear_state_after_delay(delay_seconds=6):
     baron_expire.clear()
     elder_expire.clear()
     player_ratings.clear()
+    # 🧽 Push cleared overlay state
+    await push_power_scores({})  # ✅ This clears the panel visually
     if game_ended:
         previous_state["game_ended"] = True  # Restore it for AskAI checks
         print("[After Clear] Restored game_ended flag")

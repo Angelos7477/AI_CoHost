@@ -557,25 +557,25 @@ class FeatsOfStrengthTrigger(GameTrigger):
         print("[Feats Debug] ORDER progress:", team_progress.get("ORDER", {}))
         print("[Feats Debug] CHAOS progress:", team_progress.get("CHAOS", {}))
         # === Evaluate trigger ===
+        # === Evaluate and lock slots ===
         for team, progress in team_progress.items():
             total_objectives = sum(progress["objectives"].values())
-            conditions_met = 0
-            # ✅ Count locked slots for same team
-            for slot in ["kills", "first_brick", "objectives"]:
-                if self.locked_slots[slot] == team:
-                    conditions_met += 1
-            # ✅ Evaluate and lock newly achieved conditions
-            if self.locked_slots["kills"] in (None, team) and progress["kills"] >= 3:
+            # Track whether we locked anything new
+            newly_locked = 0
+            if self.locked_slots["kills"] is None and progress["kills"] >= 3:
                 self.locked_slots["kills"] = team
-                conditions_met += 1
-            if self.locked_slots["first_brick"] in (None, team) and progress["first_brick"]:
+                newly_locked += 1
+            if self.locked_slots["first_brick"] is None and progress["first_brick"]:
                 self.locked_slots["first_brick"] = team
-                conditions_met += 1
-            if self.locked_slots["objectives"] in (None, team) and total_objectives >= 3:
+                newly_locked += 1
+            if self.locked_slots["objectives"] is None and total_objectives >= 3:
                 self.locked_slots["objectives"] = team
-                conditions_met += 1
-            # ✅ Trigger after reaching 2 or more
-            if conditions_met >= 2:
+                newly_locked += 1
+        # === Count how many slots each team has locked
+        team_locks = Counter(self.locked_slots.values())
+        # === If any team has 2+ locked slots, trigger
+        for team, count in team_locks.items():
+            if team and count >= 2:
                 self.triggered = True
                 self.triggered_team = team
                 if team == your_team:
