@@ -15,12 +15,12 @@ from shutdown_hooks import setup_shutdown_hooks
 from obs_controller import OBSController, log_obs_event
 from overlay_ws_server import start_server as start_overlay_ws_server
 from overlay_push import (push_askai_overlay,push_event_overlay,push_commentary_overlay,push_hide_overlay,
-                push_askai_cooldown_notice,push_cost_overlay,push_cost_increment, push_mood_overlay)
+                push_askai_cooldown_notice,push_cost_overlay,push_cost_increment, push_mood_overlay,push_power_scores)
 import requests
 import time
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-from triggers.game_triggers import (HPDropTrigger, CSMilestoneTrigger, KillCountTrigger, DeathTrigger, GoldThresholdTrigger, FirstBloodTrigger,
+from triggers.game_triggers import (HPDropTrigger, CSMilestoneTrigger, KillCountTrigger, DeathTrigger, GoldThresholdTrigger, FirstBloodTrigger,StreakTrigger,
              DragonKillTrigger, MultikillEventTrigger, GameEndTrigger, GoldDifferenceTrigger, AceTrigger, BaronTrigger, AtakhanKillTrigger, HeraldKillTrigger,
              FeatsOfStrengthTrigger)
 from elevenlabs.client import ElevenLabs
@@ -28,7 +28,7 @@ from elevenlabs import play, VoiceSettings
 import json
 import random
 from utils.game_utils import estimate_team_gold,ensure_item_prices_loaded
-from game_data_monitor import set_callback, game_data_loop, generate_game_recap, get_previous_state, set_triggers
+from game_data_monitor import set_callback, game_data_loop, generate_game_recap, get_previous_state, set_triggers, feats_trigger, streak_trigger
 from shared_state import previous_state
 
 # === Load Environment Variables ===
@@ -106,7 +106,6 @@ triggers = [
     AceTrigger(),
     AtakhanKillTrigger(),
     HeraldKillTrigger(),
-    FeatsOfStrengthTrigger(),
     GoldDifferenceTrigger(threshold=4000, even_margin=1000, cooldown=600),
     BaronTrigger(),
     #MultikillEventTrigger(player_name="Zoro2000"),

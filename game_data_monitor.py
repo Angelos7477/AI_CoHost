@@ -4,23 +4,40 @@ import os
 import requests
 import time
 import json
-from utils.game_utils import estimate_team_gold
-from triggers.game_triggers import MultikillEventTrigger
-from shared_state import previous_state
+from utils.game_utils import estimate_team_gold,  power_score
+from triggers.game_triggers import MultikillEventTrigger,FeatsOfStrengthTrigger, StreakTrigger
+from shared_state import previous_state, player_ratings
 import copy
+from overlay_push import push_power_scores
+
 
 POLL_INTERVAL = 5
 LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 triggers = []
 callback_from_zorobot = None
+feats_trigger = FeatsOfStrengthTrigger()
+streak_trigger = StreakTrigger()
 
 def set_triggers(trigger_list):
     global triggers
-    triggers = trigger_list
+    triggers = trigger_list + [feats_trigger, streak_trigger]  # they are declared globally above
     print(f"✅ Triggers loaded: {[t.__class__.__name__ for t in triggers]}")
 
 def get_previous_state():
     return copy.deepcopy(previous_state)
+
+def get_team_of_killer(event, all_players):
+    killer = event.get("KillerName", "")
+    player = next((p for p in all_players if p.get("summonerName") == killer), None)
+    return player.get("team") if player else None
+
+def find_enemy_laner(player, all_players):
+    role = player.get("position", "")
+    team = player.get("team", "")
+    for enemy in all_players:
+        if enemy.get("team") != team and enemy.get("position", "") == role:
+            return enemy
+    return None  # fallback if no match found
 
 def generate_game_recap(all_data, you, active_player, last_snapshot=None, dragon_kills=None):
     your_name = you.get("summonerName", "You")
@@ -144,6 +161,35 @@ async def monitor_game_data(callback):
                     if killer_player:
                         team = killer_player.get("team", "UNKNOWN")
                         dragon_kills[team] += 1
+            # Inject streaks
+            for player in all_players:
+                summoner_name = player.get("summonerName")
+                player["killStreak"] = streak_trigger.get_player_streak(summoner_name)
+            # 🧠 Collect enhanced data for power_score
+            game_time_minutes = max(game_time_seconds / 60, 1)
+            for player in all_players:
+                player_team = player.get("team", "UNKNOWN")
+                player_team_data = {
+                    "dragons": dragon_kills.get(player_team, 0),
+                    "dragon_soul": data.get("events", {}).get("DragonSoulTeam") == player_team,
+                    "elder_dragon": any(e["EventName"] == "ElderKill" and get_team_of_killer(e, all_players) == player_team for e in events),
+                    "baron_buff": any(e["EventName"] == "BaronKill" and get_team_of_killer(e, all_players) == player_team for e in events),
+                    "heralds": sum(1 for e in events if e["EventName"] == "HeraldKill" and get_team_of_killer(e, all_players) == player_team),
+                    "atakan_buff": any(e["EventName"] == "AtakhanKill" and get_team_of_killer(e, all_players) == player_team for e in events),
+                    "atakan_temp": sum(1 for e in events if e["EventName"] == "AtakhanKill" and get_team_of_killer(e, all_players) == player_team),
+                    "void_grubs": feats_trigger.voidgrub_objective_counts.get(player_team, 0),
+                    "feats_of_strength": 1 if feats_trigger.get_triggered_team() == player_team else 0,
+                    "towers": {
+                        "tier1": sum(1 for e in events if e["EventName"] == "TurretKilled" and "T1" in e["TurretKilled"] and get_team_of_killer(e, all_players) == player_team ),
+                        "tier2": sum(1 for e in events if e["EventName"] == "TurretKilled" and "T2" in e["TurretKilled"] and get_team_of_killer(e, all_players) == player_team),
+                        "tier3": sum(1 for e in events if e["EventName"] == "TurretKilled" and "T3" in e["TurretKilled"] and get_team_of_killer(e, all_players) == player_team),
+                    },
+                    "inhibitors_down": sum(1 for e in events if e["EventName"] == "InhibKilled" and get_team_of_killer(e, all_players) == player_team)
+                }
+                lane_opponent = find_enemy_laner(player, all_players)  # You'll define this
+                score = power_score(player, enemy_laner=lane_opponent, team_data=player_team_data, game_time_minutes=game_time_minutes, verbose=True)
+                player_ratings[player.get("summonerName", "UNKNOWN")] = score
+                await push_power_scores(player_ratings)
             # Detect game start or reset
             if game_time_seconds < 10 and previous_state.get("last_game_time", 9999) > 30:
                 print("🔁 New game detected. Resetting state.")

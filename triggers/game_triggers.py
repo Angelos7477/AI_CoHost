@@ -492,6 +492,8 @@ class FeatsOfStrengthTrigger(GameTrigger):
             "first_brick": None,
             "objectives": None
         }
+    def get_triggered_team(self):
+        return self.triggered_team if self.triggered else None
     def check(self, current, previous):
         if self.triggered:
             return None
@@ -558,7 +560,11 @@ class FeatsOfStrengthTrigger(GameTrigger):
         for team, progress in team_progress.items():
             total_objectives = sum(progress["objectives"].values())
             conditions_met = 0
-            # 🔒 Lock per slot when achieved
+            # ✅ Count locked slots for same team
+            for slot in ["kills", "first_brick", "objectives"]:
+                if self.locked_slots[slot] == team:
+                    conditions_met += 1
+            # ✅ Evaluate and lock newly achieved conditions
             if self.locked_slots["kills"] in (None, team) and progress["kills"] >= 3:
                 self.locked_slots["kills"] = team
                 conditions_met += 1
@@ -568,6 +574,7 @@ class FeatsOfStrengthTrigger(GameTrigger):
             if self.locked_slots["objectives"] in (None, team) and total_objectives >= 3:
                 self.locked_slots["objectives"] = team
                 conditions_met += 1
+            # ✅ Trigger after reaching 2 or more
             if conditions_met >= 2:
                 self.triggered = True
                 self.triggered_team = team
@@ -584,3 +591,55 @@ class FeatsOfStrengthTrigger(GameTrigger):
             "team": team,
             "EventID": event.get("EventID")
         })
+
+class StreakTrigger(GameTrigger):
+    def __init__(self):
+        self.streaks = defaultdict(int)
+        self.last_killed_by = {}
+        self.shutdowns = set()
+        self.processed_event_ids = set()
+    def reset(self):
+        self.streaks.clear()
+        self.last_killed_by.clear()
+        self.shutdowns.clear()
+        self.processed_event_ids.clear()
+    def get_player_streak(self, player_name):
+        return self.streaks.get(player_name, 0)
+    def check(self, current, previous):
+        messages = []
+        events = current.get("events", {}).get("Events", [])
+        for event in events:
+            if event.get("EventName") != "ChampionKill":
+                continue
+            event_id = event.get("EventID")
+            if event_id in self.processed_event_ids:
+                continue  # 🛑 Skip already processed
+            self.processed_event_ids.add(event_id)
+            killer = event.get("KillerName")
+            victim = event.get("VictimName")
+            if not killer or not victim:
+                continue
+            self.streaks[killer] += 1
+            self.streaks[victim] = 0
+            self.last_killed_by[victim] = killer
+            # 🔥 Streak milestones
+            streak = self.streaks[killer]
+            if streak == 3:
+                messages.append(f"🔥 {killer} is on a Killing Spree!")
+            elif streak == 4:
+                messages.append(f"💥 {killer} is on a Rampage!")
+            elif streak == 5:
+                messages.append(f"⚔️ {killer} is UNSTOPPABLE!")
+            elif streak == 6:
+                messages.append(f"💀 {killer} is DOMINATING!")
+            elif streak == 7:
+                messages.append(f"🔪 {killer} is GODLIKE!")
+            elif streak >= 8:
+                messages.append(f"👑 {killer} is LEGENDARY!")
+            # 💀 Shutdowns
+            if self.streaks[victim] == 0 and victim in self.shutdowns:
+                continue  # already shut down
+            if self.streaks[victim] >= 3:
+                self.shutdowns.add(victim)
+                messages.append(f"💰 {killer} shut down {victim}'s streak!")
+        return "\n".join(messages) if messages else None

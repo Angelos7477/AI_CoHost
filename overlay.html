@@ -84,7 +84,30 @@
       text-shadow: 1px 1px 3px rgba(0,0,0,0.7);
       z-index: 1001;
     }
-
+    #power-score-overlay {
+      position: absolute;
+      top: 20%;
+      left: 10px;
+      width: 220px;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 12px;
+      padding: 10px;
+      font-size: 14px;
+      z-index: 900;
+      color: white;
+      box-shadow: 0 0 10px rgba(0,0,0,0.4);
+    }
+    .score-title {
+      font-weight: bold;
+      text-align: center;
+      margin-bottom: 6px;
+      color: #FFD700;
+    }
+    #score-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px 10px;
+    }
   </style>
 </head>
 <body>
@@ -93,6 +116,10 @@
   <div id="askai-overlay">❓ Waiting for AskAI...</div>
   <div id="commentary-overlay">🎙️ Waiting for Commentary...</div>
   <div id="event-overlay">🎉 Waiting for Events...</div>
+  <div id="power-score-overlay">
+    <div class="score-title">🔥 Player Power</div>
+    <div id="score-grid"></div>
+  </div>
   <div id="cooldown-overlay">⏳ Cooldown...</div>
   <div id="cost-overlay">💰 Cost: $0.00000</div>
   <div id="mood-text"> Personality Name...</div>
@@ -169,7 +196,26 @@
           personalityIcon.src = icon;
           document.getElementById("mood-text").textContent = mode.toUpperCase();  // 👈 Add this line
           console.log("🔄 Mood update via WebSocket:", mode);
-        } else {
+        } else if (data.type === "power_scores") {
+            const grid = document.getElementById("score-grid");
+            grid.innerHTML = ""; // Clear previous scores
+            data.players.forEach(p => {
+              const nameDiv = document.createElement("div");
+              nameDiv.textContent = p.name.length > 10 ? p.name.slice(0, 10) + "…" : p.name;
+              const scoreDiv = document.createElement("div");
+              scoreDiv.textContent = p.score.toFixed(1);
+              if (p.score > 150) {
+                scoreDiv.style.color = "#00FF00";
+              } else if (p.score > 100) {
+                scoreDiv.style.color = "#FFD700";
+              } else {
+                scoreDiv.style.color = "#FF5555";
+              }
+              grid.appendChild(nameDiv);
+              grid.appendChild(scoreDiv);
+            });
+            document.getElementById("power-score-overlay").style.display = "block";
+          } else {
             console.log("⚠️ Unknown message type:", data);
         }
       };
