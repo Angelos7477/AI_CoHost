@@ -2,6 +2,7 @@
 import os
 import json
 import requests
+from collections import Counter
 
 ITEM_CACHE_FILE = "cached_item_prices.json"
 ITEM_PRICES = None
@@ -51,6 +52,20 @@ def estimate_player_item_gold(player, prices):
         item_id = item.get("itemID")
         total += prices.get(item_id, 0) * item.get("count", 1)
     return total
+
+def infer_missing_roles(formatted_players):
+    # Count current roles
+    role_counts = Counter(p["role"] for p in formatted_players if p["role"] != "unknown")
+    # Roles that have <2 players
+    all_roles = ["top", "jungle", "middle", "bottom", "utility"]
+    missing_roles = [role for role in all_roles if role_counts[role] < 2]
+    # Assign missing roles to unknowns
+    for player in formatted_players:
+        if player["role"] == "unknown" and missing_roles:
+            inferred = missing_roles.pop(0)
+            player["role"] = inferred
+            print(f"🧠 Inferred role for {player['name']}: {inferred}")
+    return formatted_players
 
 def power_score(player, enemy_laner=None, team_data=None, game_time_minutes=1, verbose=False):
     item_prices = ensure_item_prices_loaded()

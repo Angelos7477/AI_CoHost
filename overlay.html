@@ -104,10 +104,78 @@
       color: #FFD700;
     }
     #score-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 4px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
+    .lane-row {
+      display: flex;
+      height: 20px;
+      justify-content: space-between; /* space between bars */
+      gap: 4px; /* optional, for extra spacing */
+      border-radius: 6px;
+      /*overflow: hidden;*/
+      margin-bottom: 1px;
+      background: rgba(255, 255, 255, 0.1);
+    }
+    .player-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0px 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: white;
+      border-radius: 8px;
+      white-space: nowrap;
+      overflow: visible;
+      position: relative;
+      transition: all 0.3s ease;
+      box-shadow: 0 0 8px rgba(0,0,0,0.3);
+    }
+    /* ✅ Add floating label */
+    .player-bar::after {
+      content: attr(data-label);
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      white-space: nowrap;
+      font-size: 12px;
+      color: white;
+      pointer-events: none;
+    }
+    .order {
+      background: linear-gradient(to right, #005bbb, #00bfff);
+      justify-content: flex-start;
+    }
+    .chaos {
+      background: linear-gradient(to right, #ff5e62, #ff9966);
+      justify-content: flex-end;
+    }
+    .team-score-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .team-score {
+      font-size: 14px;
+      font-weight: 700;
+      padding: 0px 8px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.1);
+      box-shadow: 0 0 6px rgba(0,0,0,0.3);
+      text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+    }
+    .team-score.order {
+      color: #cce5ff;
+      background: linear-gradient(to right, #005bbb, #00bfff);
+    }
+    .team-score.chaos {
+      color: #ffd6cc;
+      background: linear-gradient(to right, #ff5e62, #ff9966);
+    }
+
   </style>
 </head>
 <body>
@@ -118,6 +186,10 @@
   <div id="event-overlay">🎉 Waiting for Events...</div>
   <div id="power-score-overlay">
     <div class="score-title">🔥 Player Power</div>
+    <div class="team-score-row">
+      <div id="order-team-score" class="team-score order">ORDER: 0</div>
+      <div id="chaos-team-score" class="team-score chaos">CHAOS: 0</div>
+    </div>
     <div id="score-grid"></div>
   </div>
   <div id="cooldown-overlay">⏳ Cooldown...</div>
@@ -197,28 +269,76 @@
           document.getElementById("mood-text").textContent = mode.toUpperCase();  // 👈 Add this line
           console.log("🔄 Mood update via WebSocket:", mode);
         } else if (data.type === "power_scores") {
-            const grid = document.getElementById("score-grid");
-            grid.innerHTML = ""; // Clear previous scores
-            data.players.forEach(p => {
-              const nameDiv = document.createElement("div");
-              nameDiv.textContent = p.name.length > 10 ? p.name.slice(0, 10) + "…" : p.name;
-              const scoreDiv = document.createElement("div");
-              scoreDiv.textContent = p.score.toFixed(1);
-              if (p.score > 150) {
-                scoreDiv.style.color = "#00FF00";
-              } else if (p.score > 100) {
-                scoreDiv.style.color = "#FFD700";
-              } else {
-                scoreDiv.style.color = "#FF5555";
-              }
-              grid.appendChild(nameDiv);
-              grid.appendChild(scoreDiv);
-            });
-            document.getElementById("power-score-overlay").style.display = "block";
-          } else {
-            console.log("⚠️ Unknown message type:", data);
-        }
-      };
+          const grid = document.getElementById("score-grid");
+          grid.innerHTML = "";
+          document.getElementById("order-team-score").textContent = `ORDER: ${data.order_total}`;
+          document.getElementById("chaos-team-score").textContent = `CHAOS: ${data.chaos_total}`;
+          const roles = ["top", "jungle", "middle", "bottom", "utility"];
+          const knownRoles = ["top", "jungle", "middle", "bottom", "utility"];
+          roles.forEach(role => {
+            const players = data.players.filter(p => p.role === role);
+            if (players.length !== 2) return;
+            const [p1, p2] = players;
+            const total = p1.score + p2.score || 1;
+            const row = document.createElement("div");
+            row.className = "lane-row";
+            const bar1 = document.createElement("div");
+            const bar2 = document.createElement("div");
+            const p1Width = `${(p1.score / total) * 100}%`;
+            const p2Width = `${(p2.score / total) * 100}%`;
+            bar1.className = "player-bar " + (p1.team === "ORDER" ? "order" : "chaos");
+            bar1.style.width = p1Width;
+            bar1.setAttribute("data-label", `${p1.name} (${Math.round(p1.score)})`);
+            bar1.textContent = ""; // Remove inner text to avoid overflow
+            bar2.className = "player-bar " + (p2.team === "ORDER" ? "order" : "chaos");
+            bar2.style.width = p2Width;
+            bar2.setAttribute("data-label", `${p2.name} (${Math.round(p2.score)})`);
+            bar2.textContent = "";
+            // Order matters: ORDER should always come first (left)
+            if (p1.team === "ORDER") {
+              row.appendChild(bar1);
+              row.appendChild(bar2);
+            } else {
+              row.appendChild(bar2);
+              row.appendChild(bar1);
+            }
+            grid.appendChild(row);
+          });
+          // ✅ Fallback display for players with unknown role
+          const unknownPlayers = data.players.filter(p => !knownRoles.includes(p.role));
+          if (unknownPlayers.length >= 2) {
+            const [p1, p2] = unknownPlayers.slice(0, 2); // Only show first 2
+            const total = p1.score + p2.score || 1;
+            const row = document.createElement("div");
+            row.className = "lane-row";
+            const bar1 = document.createElement("div");
+            const bar2 = document.createElement("div");
+            const p1Width = `${(p1.score / total) * 100}%`;
+            const p2Width = `${(p2.score / total) * 100}%`;
+            bar1.className = "player-bar " + (p1.team === "ORDER" ? "order" : "chaos");
+            bar1.style.width = p1Width;
+            bar1.setAttribute("data-label", `${p1.name} (${Math.round(p1.score)})`);
+            bar1.textContent = ""; // Remove inner text to avoid overflow
+            bar2.className = "player-bar " + (p2.team === "ORDER" ? "order" : "chaos");
+            bar2.style.width = p2Width;
+            bar2.setAttribute("data-label", `${p2.name} (${Math.round(p2.score)})`);
+            bar2.textContent = "";
+            if (p1.team === "ORDER") {
+              row.appendChild(bar1);
+              row.appendChild(bar2);
+            } else {
+              row.appendChild(bar2);
+              row.appendChild(bar1);
+            }
+            grid.appendChild(row);
+          } document.getElementById("power-score-overlay").style.display = "block";
+        } else if (data.type === "toggle_power") {
+          const overlay = document.getElementById("power-score-overlay");
+          overlay.style.display = data.visible ? "block" : "none";
+        } else {
+                    console.log("⚠️ Unknown message type:", data);
+                }
+              };
 
       ws.onerror = (e) => {
         console.log("[HTML] ❌ WebSocket error:", e);

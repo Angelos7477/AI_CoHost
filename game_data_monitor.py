@@ -4,7 +4,7 @@ import os
 import requests
 import time
 import json
-from utils.game_utils import estimate_team_gold,  power_score
+from utils.game_utils import estimate_team_gold,  power_score, infer_missing_roles
 from triggers.game_triggers import MultikillEventTrigger,FeatsOfStrengthTrigger, StreakTrigger
 from shared_state import previous_state, player_ratings, inhib_respawn_timer, baron_expire, elder_expire
 import copy
@@ -30,6 +30,19 @@ def get_team_of_killer(event, all_players):
     killer = event.get("KillerName", "")
     player = next((p for p in all_players if p.get("summonerName") == killer), None)
     return player.get("team") if player else None
+
+def normalize_role(position):
+    if not position:
+        return "unknown"
+    mapping = {
+        "TOP": "top",
+        "JUNGLE": "jungle",
+        "MIDDLE": "middle",
+        "BOTTOM": "bottom",
+        "UTILITY": "utility",
+        "SUPPORT": "utility"
+    }
+    return mapping.get(position.upper(), "unknown") if position else "unknown"
 
 def find_enemy_laner(player, all_players):
     role = player.get("position", "")
@@ -207,7 +220,25 @@ async def monitor_game_data(callback):
                 lane_opponent = find_enemy_laner(player, all_players)  # You'll define this
                 score = power_score(player, enemy_laner=lane_opponent, team_data=player_team_data, game_time_minutes=game_time_minutes, verbose=True)
                 player_ratings[player.get("summonerName", "UNKNOWN")] = score
-                await push_power_scores(player_ratings)
+            # ✅ Now after the loop: build formatted_players once
+            formatted_players = [
+                {
+                    "name": player.get("summonerName", "UNKNOWN"),
+                    "score": round(player_ratings.get(player.get("summonerName", ""), 0), 1),
+                    "team": player.get("team", "UNKNOWN"),
+                    "role": normalize_role(player.get("position", ""))
+                }
+                for player in all_players
+            ]
+            # ✅ And then infer and push
+            formatted_players = infer_missing_roles(formatted_players)
+            order_score = sum(p["score"] for p in formatted_players if p["team"] == "ORDER")
+            chaos_score = sum(p["score"] for p in formatted_players if p["team"] == "CHAOS")
+            await push_power_scores({
+                "players": formatted_players,
+                "order_total": round(order_score, 1),
+                "chaos_total": round(chaos_score, 1)
+            })
             # Detect game start or reset
             if game_time_seconds < 10 and previous_state.get("last_game_time", 9999) > 30:
                 print("🔁 New game detected. Resetting state.")

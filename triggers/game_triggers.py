@@ -608,12 +608,31 @@ class StreakTrigger(GameTrigger):
     def check(self, current, previous):
         messages = []
         events = current.get("events", {}).get("Events", [])
+        all_players = current.get("allPlayers", [])
+        your_team = current.get("your_team", "ORDER")
+        your_name = next(
+            (p.get("summonerName") for p in all_players if p.get("team") == your_team and not p.get("isBot", False)),
+            None
+        )
+        name_to_team = {p.get("summonerName"): p.get("team") for p in all_players}
+        def perspective(name):
+            if name == your_name:
+                return "self"
+            elif name_to_team.get(name) == your_team:
+                return "ally"
+            else:
+                return "enemy"
+        icon_map = {
+            "self": "🔥",
+            "ally": "✨",
+            "enemy": "⚠️"
+        }
         for event in events:
             if event.get("EventName") != "ChampionKill":
                 continue
             event_id = event.get("EventID")
             if event_id in self.processed_event_ids:
-                continue  # 🛑 Skip already processed
+                continue
             self.processed_event_ids.add(event_id)
             killer = event.get("KillerName")
             victim = event.get("VictimName")
@@ -622,24 +641,40 @@ class StreakTrigger(GameTrigger):
             self.streaks[killer] += 1
             self.streaks[victim] = 0
             self.last_killed_by[victim] = killer
-            # 🔥 Streak milestones
+            killer_perspective = perspective(killer)
+            victim_perspective = perspective(victim)
+            # 🔥 Streaks
             streak = self.streaks[killer]
-            if streak == 3:
-                messages.append(f"🔥 {killer} is on a Killing Spree!")
-            elif streak == 4:
-                messages.append(f"💥 {killer} is on a Rampage!")
-            elif streak == 5:
-                messages.append(f"⚔️ {killer} is UNSTOPPABLE!")
-            elif streak == 6:
-                messages.append(f"💀 {killer} is DOMINATING!")
-            elif streak == 7:
-                messages.append(f"🔪 {killer} is GODLIKE!")
-            elif streak >= 8:
-                messages.append(f"👑 {killer} is LEGENDARY!")
-            # 💀 Shutdowns
+            tag_map = {
+                3: "Killing Spree",
+                4: "Rampage",
+                5: "UNSTOPPABLE",
+                6: "DOMINATING",
+                7: "GODLIKE"
+            }
+            tag = tag_map.get(streak, "LEGENDARY") if streak >= 3 else None
+            if tag:
+                prefix = icon_map[killer_perspective]
+                if killer_perspective == "self":
+                    messages.append(f"{prefix} You're on a {tag}!")
+                elif killer_perspective == "ally":
+                    messages.append(f"{prefix} Your ally {killer} is on a {tag}!")
+                else:
+                    messages.append(f"{prefix} Enemy {killer} is on a {tag}!")
+            # 💰 Shutdowns
             if self.streaks[victim] == 0 and victim in self.shutdowns:
-                continue  # already shut down
+                continue
             if self.streaks[victim] >= 3:
                 self.shutdowns.add(victim)
-                messages.append(f"💰 {killer} shut down {victim}'s streak!")
+                if killer_perspective == "self":
+                    messages.append(f"💰 You shut down {victim}!")
+                elif killer_perspective == "ally":
+                    messages.append(f"💰 Your ally {killer} shut down {victim}!")
+                else:
+                    if victim_perspective == "self":
+                        messages.append(f"☠️ {killer} shut you down!")
+                    elif victim_perspective == "ally":
+                        messages.append(f"☠️ {killer} shut down your ally {victim}!")
+                    else:
+                        messages.append(f"💰 {killer} shut down {victim}!")
         return "\n".join(messages) if messages else None

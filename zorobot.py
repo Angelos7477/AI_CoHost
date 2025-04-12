@@ -14,7 +14,7 @@ import concurrent.futures
 from shutdown_hooks import setup_shutdown_hooks
 from obs_controller import OBSController, log_obs_event
 from overlay_ws_server import start_server as start_overlay_ws_server
-from overlay_push import (push_askai_overlay,push_event_overlay,push_commentary_overlay,push_hide_overlay,
+from overlay_push import (push_askai_overlay,push_event_overlay,push_commentary_overlay,push_hide_overlay, push_toggle_power_overlay,
                 push_askai_cooldown_notice,push_cost_overlay,push_cost_increment, push_mood_overlay,push_power_scores)
 import requests
 import time
@@ -83,6 +83,7 @@ askai_queue = asyncio.Queue()
 current_mode_cache = "hype"  # default
 commentator_paused = False  # New flag
 eventsub_paused = False
+power_score_visible = True  # default state
 # Global reference to bot instance (initialized later)
 bot_instance = None
 os.makedirs("logs", exist_ok=True)
@@ -743,6 +744,17 @@ class ZoroTheCasterBot(commands.Bot):
             f"🔸 Commentary: {paused_text}\n"
             f"🔸 AskAI Queue: {queue_size} item(s)"
         )
+
+    @commands.command(name='power')
+    async def toggle_power(self, ctx):
+        if not ctx.author.is_broadcaster:
+            await ctx.send("❌ Only the streamer can toggle the power score overlay.")
+            return
+        global power_score_visible
+        power_score_visible = not power_score_visible
+    # ✅ Make sure broadcast is imported or accessible
+        await push_toggle_power_overlay(power_score_visible)
+        await ctx.send(f"🟢 Power score overlay {'enabled' if power_score_visible else 'disabled'}.")
 
     @commands.command(name="testcheer")
     async def test_cheer_command(self, ctx):

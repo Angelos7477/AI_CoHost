@@ -68,14 +68,25 @@ async def push_cost_overlay(amount):
         "amount": amount
     })
 
-async def push_power_scores(scores_dict):
+async def push_power_scores(payload):
     """
-    Send a dict of player names to power scores to overlay.
+    Send player power data and team totals to overlay.
+    Expects a dict with keys:
+      - players: list of player dicts (name, score, team, role)
+      - order_total: float
+      - chaos_total: float
     """
-    players = [{"name": name, "score": score} for name, score in scores_dict.items()]
     await broadcast({
         "type": "power_scores",
-        "players": players
+        "players": payload.get("players", []),
+        "order_total": payload.get("order_total", 0),
+        "chaos_total": payload.get("chaos_total", 0)
+    })
+
+async def push_toggle_power_overlay(visible: bool):
+    await broadcast({
+        "type": "toggle_power",
+        "visible": visible
     })
 
 async def push_cost_increment(cost):
