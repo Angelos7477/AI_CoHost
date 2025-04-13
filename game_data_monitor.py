@@ -218,7 +218,7 @@ async def monitor_game_data(callback):
                     "inhibitors_down": sum(1 for t in inhib_respawn_timer[player_team] if t > game_time_seconds)
                 }
                 lane_opponent = find_enemy_laner(player, all_players)  # You'll define this
-                score = power_score(player, enemy_laner=lane_opponent, team_data=player_team_data, game_time_minutes=game_time_minutes, verbose=True)
+                score = power_score(player, enemy_laner=lane_opponent, team_data=player_team_data, game_time_minutes=game_time_minutes, verbose=True) * 40
                 player_ratings[player.get("summonerName", "UNKNOWN")] = score
             # ✅ Now after the loop: build formatted_players once
             formatted_players = [
