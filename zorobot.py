@@ -115,6 +115,9 @@ triggers = [
 GAME_TTS_COOLDOWN = 4  # seconds
 last_game_tts_time = 0  # global timestamp tracker
 AUTO_RECAP_INTERVAL = 600  # every 10 minutes
+tts_busy = False
+buffered_game_events = []
+tts_monitor_task = None  # Will be assigned during startup
 
 # === Utility Functions ===
 def debug_imports():
@@ -240,9 +243,11 @@ async def speak_text(text):
     await loop.run_in_executor(tts_executor, speak_sync, text, voice_id)
 
 async def tts_worker():
+    global tts_busy
     while True:
         item = await tts_queue.get()
         try:
+            tts_busy = True
             if isinstance(item, tuple) and item[0] in ("askai", "event", "game"):
                 item_type = item[0]
                 if item_type == "askai":
@@ -320,8 +325,10 @@ async def tts_worker():
                 await speak_text(item)
         except Exception as e:
             log_error(f"TTS ERROR: {e}")
-        tts_queue.task_done()
-        await asyncio.sleep(1.5)  # ⏱️ Small delay to avoid spammy speech
+        finally:
+            tts_queue.task_done()
+            tts_busy = False
+            await asyncio.sleep(1.5)  # ⏱️ Small delay to avoid spammy speech
 
 
 async def safe_add_to_tts_queue(item):
@@ -334,6 +341,19 @@ async def safe_add_to_tts_queue(item):
         log_error(f"[EVENTSUB TTS SKIPPED] Queue full. EventSub message skipped: {item}")
         return
     await tts_queue.put(item)
+
+async def tts_monitor_loop():
+    global tts_busy
+    while True:
+        await asyncio.sleep(0.5)
+        if not tts_busy and buffered_game_events:
+            print("🧹 TTS is free, flushing buffered game events...")
+            combined = "Commentate on the current game:\n" + "\n".join(buffered_game_events)
+            log_merged_prompt(combined)
+            mode = get_current_mode()
+            ai_text = get_ai_response(combined, mode)
+            await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
+            buffered_game_events.clear()
 
 def log_error(error_text: str):
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -387,23 +407,27 @@ async def clear_state_after_delay(delay_seconds=6):
             trigger.reset()
 
 def handle_game_data(data, your_player_data, current_data, merged_results):
-    global last_game_tts_time
+    global last_game_tts_time, buffered_game_events, tts_busy
     timestamp_now = time.time()
     game_time_seconds = current_data["last_game_time"]
     # ✅ Now let TTS play as usual
-    if merged_results and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
-        combined_prompt = "Commentate on the current game:\n" + "\n".join(merged_results)
-        log_merged_prompt(combined_prompt)
-        mode = get_current_mode()
-        ai_text = get_ai_response(combined_prompt, mode)
-        asyncio.create_task(safe_add_to_tts_queue(("game", "GameMonitor", ai_text)))
-        last_game_tts_time = timestamp_now
-        # ✅ After sending TTS, check if game ended and mark state
-        if any("Game over" in msg for msg in merged_results):
-            if previous_state.get("game_ended") is not True:
-                previous_state["game_ended"] = True
-                print("🧹 GameEnd detected, starting delayed cleanup...")
-                asyncio.create_task(clear_state_after_delay())
+    if merged_results:
+        if not tts_busy and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
+            combined_prompt = "Commentate on the current game:\n" + "\n".join(merged_results)
+            log_merged_prompt(combined_prompt)
+            mode = get_current_mode()
+            ai_text = get_ai_response(combined_prompt, mode)
+            asyncio.create_task(safe_add_to_tts_queue(("game", "GameMonitor", ai_text)))
+            last_game_tts_time = timestamp_now
+            # ✅ After sending TTS, check if game ended and mark state
+            if any("Game over" in msg for msg in merged_results):
+                if previous_state.get("game_ended") is not True:
+                    previous_state["game_ended"] = True
+                    print("🧹 GameEnd detected, starting delayed cleanup...")
+                    asyncio.create_task(clear_state_after_delay())
+        elif tts_busy:
+            buffered_game_events.extend(merged_results)
+            print(f"🧠 TTS busy — buffering {len(merged_results)} merged game lines")
     # Recap logic
     if (timestamp_now - previous_state.get("last_recap_time", 0)) >= AUTO_RECAP_INTERVAL:
         if game_time_seconds < 300:
@@ -967,6 +991,8 @@ if __name__ == "__main__":
         set_triggers(triggers)  # ✅ This sends your trigger list to game_data_monitor
         set_callback(handle_game_data)  # ✅ now it's set just before the loop starts
         asyncio.create_task(game_data_loop())
+        global tts_monitor_task
+        tts_monitor_task = asyncio.create_task(tts_monitor_loop())
         # Start the Twitch bot
         bot = ZoroTheCasterBot()
         global bot_instance

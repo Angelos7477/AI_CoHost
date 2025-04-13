@@ -86,10 +86,10 @@
     }
     #power-score-overlay {
       position: absolute;
-      top: 20%;
+      top: 56%;
       left: 10px;
       width: 240px;
-      background: rgba(15, 15, 20, 0.85);
+      background: rgba(15, 15, 20, 0.5);
       border-radius: 16px;
       padding: 12px;
       font-size: 14px;
@@ -136,15 +136,27 @@
     .lane-row {
       display: flex;
       justify-content: space-between;
-      gap: 6px;
+      border-radius: 8px;
+      gap: 4px;
+    }
+    .lane-icon {
+      width: 13px;
+      height: 13px;
+      margin-right: 2px;
+      vertical-align: middle;
+      flex-shrink: 0;
+      filter: drop-shadow(0 0 2px rgba(0,0,0,0.5));
     }
     .player-bar {
-      flex: 1;
-      padding: 6px 8px;
-      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 80px;
+      height: 20px; 
+      padding: 2px 6px;
+      font-size: 10px;
       font-weight: 600;
       border-radius: 10px;
-      text-align: center;
       position: relative;
       overflow: hidden;
       transition: transform 0.2s ease;
@@ -168,7 +180,7 @@
       left: 50%;
       transform: translate(-50%, -50%);
       white-space: nowrap;
-      font-size: 13px;
+      font-size: 10px;
       color: white;
       pointer-events: none;
     }
@@ -220,7 +232,8 @@
       bottom: 'icons/bottom.png',
       utility: 'icons/utility.png'
     };
-
+    
+    let powerOverlayVisible = true;
     let ws = null;
     let reconnectTimeout = null;
 
@@ -286,18 +299,24 @@
             const total = p1.score + p2.score || 1;
             const row = document.createElement("div");
             row.className = "lane-row";
-            const bar1 = document.createElement("div");
-            const bar2 = document.createElement("div");
-            const p1Width = `${(p1.score / total) * 100}%`;
-            const p2Width = `${(p2.score / total) * 100}%`;
-            bar1.className = "player-bar " + (p1.team === "ORDER" ? "order" : "chaos");
-            bar1.style.width = p1Width;
-            bar1.setAttribute("data-label", `${p1.name} (${Math.round(p1.score)})`);
-            bar1.textContent = ""; // Remove inner text to avoid overflow
-            bar2.className = "player-bar " + (p2.team === "ORDER" ? "order" : "chaos");
-            bar2.style.width = p2Width;
-            bar2.setAttribute("data-label", `${p2.name} (${Math.round(p2.score)})`);
-            bar2.textContent = "";
+            function createPlayerBar(player, role) {
+              const bar = document.createElement("div");
+              const width = `${(player.score / total) * 100}%`;
+              bar.className = "player-bar " + (player.team === "ORDER" ? "order" : "chaos");
+              bar.style.width = width;
+              // ICON
+              const icon = document.createElement("img");
+              icon.src = roleIcons[role] || "";
+              icon.className = "lane-icon";
+              bar.appendChild(icon);
+              // TEXT
+              const span = document.createElement("span");
+              span.textContent = `${player.name} (${Math.round(player.score)})`;
+              bar.appendChild(span);
+              return bar;
+            }
+            const bar1 = createPlayerBar(p1, role);
+            const bar2 = createPlayerBar(p2, role);
             // Order matters: ORDER should always come first (left)
             if (p1.team === "ORDER") {
               row.appendChild(bar1);
@@ -315,18 +334,24 @@
             const total = p1.score + p2.score || 1;
             const row = document.createElement("div");
             row.className = "lane-row";
-            const bar1 = document.createElement("div");
-            const bar2 = document.createElement("div");
-            const p1Width = `${(p1.score / total) * 100}%`;
-            const p2Width = `${(p2.score / total) * 100}%`;
-            bar1.className = "player-bar " + (p1.team === "ORDER" ? "order" : "chaos");
-            bar1.style.width = p1Width;
-            bar1.setAttribute("data-label", `${p1.name} (${Math.round(p1.score)})`);
-            bar1.textContent = ""; // Remove inner text to avoid overflow
-            bar2.className = "player-bar " + (p2.team === "ORDER" ? "order" : "chaos");
-            bar2.style.width = p2Width;
-            bar2.setAttribute("data-label", `${p2.name} (${Math.round(p2.score)})`);
-            bar2.textContent = "";
+            function createPlayerBar(player, role) {
+              const bar = document.createElement("div");
+              const width = `${(player.score / total) * 100}%`;
+              bar.className = "player-bar " + (player.team === "ORDER" ? "order" : "chaos");
+              bar.style.width = width;
+              // ICON
+              const icon = document.createElement("img");
+              icon.src = roleIcons[role] || "";
+              icon.className = "lane-icon";
+              bar.appendChild(icon);
+              // TEXT
+              const span = document.createElement("span");
+              span.textContent = `${player.name} (${Math.round(player.score)})`;
+              bar.appendChild(span);
+              return bar;
+            }
+            const bar1 = createPlayerBar(p1, role);
+            const bar2 = createPlayerBar(p2, role);
             if (p1.team === "ORDER") {
               row.appendChild(bar1);
               row.appendChild(bar2);
@@ -335,10 +360,13 @@
               row.appendChild(bar1);
             }
             grid.appendChild(row);
-          } document.getElementById("power-score-overlay").style.display = "block";
+          } if (powerOverlayVisible) {
+            document.getElementById("power-score-overlay").style.display = "block";
+          }
         } else if (data.type === "toggle_power") {
           const overlay = document.getElementById("power-score-overlay");
           overlay.style.display = data.visible ? "block" : "none";
+          powerOverlayVisible = data.visible;  // ✅ Remember the new state
         } else {
                     console.log("⚠️ Unknown message type:", data);
                 }
