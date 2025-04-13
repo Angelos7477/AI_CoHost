@@ -651,6 +651,33 @@ class ZoroTheCasterBot(commands.Bot):
         )
         await ctx.send(commands_text)
 
+    @commands.command(name="testpower")
+    async def test_power_overlay(self, ctx):
+        if not ctx.author.is_broadcaster:
+            await ctx.send("❌ Only the streamer can trigger test overlay.")
+            return
+        dummy_players = [
+            {"name": "Garen", "score": 82.1, "team": "ORDER", "role": "top"},
+            {"name": "Jax", "score": 78.4, "team": "CHAOS", "role": "top"},
+            {"name": "Lee Sin", "score": 66.2, "team": "ORDER", "role": "jungle"},
+            {"name": "Nidalee", "score": 72.5, "team": "CHAOS", "role": "jungle"},
+            {"name": "Ahri", "score": 91.3, "team": "ORDER", "role": "middle"},
+            {"name": "Zed", "score": 88.7, "team": "CHAOS", "role": "middle"},
+            {"name": "Ashe", "score": 60.5, "team": "ORDER", "role": "bottom"},
+            {"name": "Jhin", "score": 64.0, "team": "CHAOS", "role": "bottom"},
+            {"name": "Thresh", "score": 49.3, "team": "ORDER", "role": "utility"},
+            {"name": "Pyke", "score": 51.8, "team": "CHAOS", "role": "utility"},
+        ]
+        order_score = sum(p["score"] for p in dummy_players if p["team"] == "ORDER")
+        chaos_score = sum(p["score"] for p in dummy_players if p["team"] == "CHAOS")
+
+        await push_power_scores({
+            "players": dummy_players,
+            "order_total": round(order_score, 1),
+            "chaos_total": round(chaos_score, 1)
+        })
+        await ctx.send("🧪 Dummy power score data sent to overlay.")
+
     @commands.command(name="moodroll")
     async def moodroll(self, ctx):
         global last_moodroll_time
