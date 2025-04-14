@@ -84,6 +84,106 @@
       text-shadow: 1px 1px 3px rgba(0,0,0,0.7);
       z-index: 1001;
     }
+    #power-score-overlay {
+      position: absolute;
+      top: 45%;
+      right: 10px;
+      width: 260px;
+      background: rgba(15, 15, 20, 0.4);
+      border-radius: 16px;
+      padding: 8px;
+      font-size: 14px;
+      z-index: 900;
+      color: #f0f0f0;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    .score-title {
+      font-weight: 600;
+      text-align: center;
+      margin-bottom: 6px;
+      color: #f7c948; /* Soft Gold */
+      text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    }
+    .team-score-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .team-score {
+      flex: 1;
+      text-align: center;
+      margin: 0 4px;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 4px 8px;
+      border-radius: 10px;
+      color: #ffffff;
+      background: rgba(255,255,255,0.1);
+      box-shadow: inset 0 -2px 6px rgba(0,0,0,0.3);
+    }
+    .team-score.order {
+      background: linear-gradient(120deg, #1b3561, #3aa8ff);
+    }
+    .team-score.chaos {
+      background: linear-gradient(120deg, #302929, #fc5763);
+    }
+    #score-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .lane-row {
+      display: flex;
+      justify-content: space-between;
+      border-radius: 8px;
+      gap: 4px;
+    }
+    .lane-icon {
+      width: 13px;
+      height: 13px;
+      margin-right: 2px;
+      vertical-align: middle;
+      flex-shrink: 0;
+      filter: drop-shadow(0 0 2px rgba(0,0,0,0.5));
+    }
+    .player-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 80px;
+      height: 20px; 
+      padding: 2px 6px;
+      font-size: 10px;
+      font-weight: 600;
+      border-radius: 10px;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.2s ease;
+    }
+    .player-bar:hover {
+      transform: scale(1.05);
+    }
+    .player-bar.order {
+      background: linear-gradient(90deg, #1b3561, #3aa8ff);
+      box-shadow: inset 0 -2px 5px rgba(0,0,0,0.3);
+    }
+    .player-bar.chaos {
+      background: linear-gradient(90deg, #302929, #fc5763);
+      box-shadow: inset 0 -2px 5px rgba(0,0,0,0.3);
+    }
+    /* ✅ Crucial addition to fix missing text: */
+    .player-bar::after {
+      content: attr(data-label);
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      white-space: nowrap;
+      font-size: 10px;
+      color: white;
+      pointer-events: none;
+    }
 
   </style>
 </head>
@@ -93,6 +193,14 @@
   <div id="askai-overlay">❓ Waiting for AskAI...</div>
   <div id="commentary-overlay">🎙️ Waiting for Commentary...</div>
   <div id="event-overlay">🎉 Waiting for Events...</div>
+  <div id="power-score-overlay">
+    <div class="score-title">🔥 Player Power</div>
+    <div class="team-score-row">
+      <div id="order-team-score" class="team-score order">ORDER: 0</div>
+      <div id="chaos-team-score" class="team-score chaos">CHAOS: 0</div>
+    </div>
+    <div id="score-grid"></div>
+  </div>
   <div id="cooldown-overlay">⏳ Cooldown...</div>
   <div id="cost-overlay">💰 Cost: $0.00000</div>
   <div id="mood-text"> Personality Name...</div>
@@ -116,8 +224,16 @@
       "wholesome": "icons/wholesome.png",
       "sarcastic": "icons/sarcastic.png"
     };
-
-
+    // Adding lane icons
+    const roleIcons = {
+      top: 'icons/top.png',
+      jungle: 'icons/jungle.png',
+      middle: 'icons/middle.png',
+      bottom: 'icons/bottom.png',
+      utility: 'icons/utility.png'
+    };
+    
+    let powerOverlayVisible = true;
     let ws = null;
     let reconnectTimeout = null;
 
@@ -169,10 +285,92 @@
           personalityIcon.src = icon;
           document.getElementById("mood-text").textContent = mode.toUpperCase();  // 👈 Add this line
           console.log("🔄 Mood update via WebSocket:", mode);
+        } else if (data.type === "power_scores") {
+          const grid = document.getElementById("score-grid");
+          grid.innerHTML = "";
+          document.getElementById("order-team-score").textContent = `ORDER: ${data.order_total}`;
+          document.getElementById("chaos-team-score").textContent = `CHAOS: ${data.chaos_total}`;
+          const roles = ["top", "jungle", "middle", "bottom", "utility"];
+          const knownRoles = ["top", "jungle", "middle", "bottom", "utility"];
+          roles.forEach(role => {
+            const players = data.players.filter(p => p.role === role);
+            if (players.length !== 2) return;
+            const [p1, p2] = players;
+            const total = p1.score + p2.score || 1;
+            const row = document.createElement("div");
+            row.className = "lane-row";
+            function createPlayerBar(player, role) {
+              const bar = document.createElement("div");
+              const width = `${(player.score / total) * 100}%`;
+              bar.className = "player-bar " + (player.team === "ORDER" ? "order" : "chaos");
+              bar.style.width = width;
+              // ICON
+              const icon = document.createElement("img");
+              icon.src = roleIcons[role] || "";
+              icon.className = "lane-icon";
+              bar.appendChild(icon);
+              // TEXT
+              const span = document.createElement("span");
+              span.textContent = `${player.name} (${Math.round(player.score)})`;
+              bar.appendChild(span);
+              return bar;
+            }
+            const bar1 = createPlayerBar(p1, role);
+            const bar2 = createPlayerBar(p2, role);
+            // Order matters: ORDER should always come first (left)
+            if (p1.team === "ORDER") {
+              row.appendChild(bar1);
+              row.appendChild(bar2);
+            } else {
+              row.appendChild(bar2);
+              row.appendChild(bar1);
+            }
+            grid.appendChild(row);
+          });
+          // ✅ Fallback display for players with unknown role
+          const unknownPlayers = data.players.filter(p => !knownRoles.includes(p.role));
+          if (unknownPlayers.length >= 2) {
+            const [p1, p2] = unknownPlayers.slice(0, 2); // Only show first 2
+            const total = p1.score + p2.score || 1;
+            const row = document.createElement("div");
+            row.className = "lane-row";
+            function createPlayerBar(player, role) {
+              const bar = document.createElement("div");
+              const width = `${(player.score / total) * 100}%`;
+              bar.className = "player-bar " + (player.team === "ORDER" ? "order" : "chaos");
+              bar.style.width = width;
+              // ICON
+              const icon = document.createElement("img");
+              icon.src = roleIcons[role] || "";
+              icon.className = "lane-icon";
+              bar.appendChild(icon);
+              // TEXT
+              const span = document.createElement("span");
+              span.textContent = `${player.name} (${Math.round(player.score)})`;
+              bar.appendChild(span);
+              return bar;
+            }
+            const bar1 = createPlayerBar(p1, role);
+            const bar2 = createPlayerBar(p2, role);
+            if (p1.team === "ORDER") {
+              row.appendChild(bar1);
+              row.appendChild(bar2);
+            } else {
+              row.appendChild(bar2);
+              row.appendChild(bar1);
+            }
+            grid.appendChild(row);
+          } if (powerOverlayVisible) {
+            document.getElementById("power-score-overlay").style.display = "block";
+          }
+        } else if (data.type === "toggle_power") {
+          const overlay = document.getElementById("power-score-overlay");
+          overlay.style.display = data.visible ? "block" : "none";
+          powerOverlayVisible = data.visible;  // ✅ Remember the new state
         } else {
-            console.log("⚠️ Unknown message type:", data);
-        }
-      };
+                    console.log("⚠️ Unknown message type:", data);
+                }
+              };
 
       ws.onerror = (e) => {
         console.log("[HTML] ❌ WebSocket error:", e);

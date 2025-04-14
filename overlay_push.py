@@ -1,3 +1,4 @@
+#overlay_push.py
 from overlay_ws_server import broadcast
 import asyncio
 
@@ -65,6 +66,27 @@ async def push_cost_overlay(amount):
     await broadcast({
         "type": "cost",
         "amount": amount
+    })
+
+async def push_power_scores(payload):
+    """
+    Send player power data and team totals to overlay.
+    Expects a dict with keys:
+      - players: list of player dicts (name, score, team, role)
+      - order_total: float
+      - chaos_total: float
+    """
+    await broadcast({
+        "type": "power_scores",
+        "players": payload.get("players", []),
+        "order_total": payload.get("order_total", 0),
+        "chaos_total": payload.get("chaos_total", 0)
+    })
+
+async def push_toggle_power_overlay(visible: bool):
+    await broadcast({
+        "type": "toggle_power",
+        "visible": visible
     })
 
 async def push_cost_increment(cost):

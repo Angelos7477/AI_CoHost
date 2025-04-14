@@ -156,7 +156,7 @@ class GoldThresholdTrigger:
                 return random.choice(messages)
         return None
 
-class FirstBloodTrigger:
+class FirstBloodTrigger(GameTrigger):
     def __init__(self):
         self.triggered = False
     def reset(self):
@@ -164,12 +164,25 @@ class FirstBloodTrigger:
     def check(self, current, previous):
         if self.triggered:
             return None
-        # First blood = when total kills go from 0 to 1
-        total_kills_before = previous.get("total_kills", 0)
-        total_kills_now = current.get("total_kills", 0)
-        if total_kills_before == 0 and total_kills_now > 0:
-            self.triggered = True
-            return "🩸 First blood has been drawn! The fight begins!"
+        events = current.get("events", {}).get("Events", [])
+        your_name = current.get("your_name", "")
+        your_team = current.get("your_team", "ORDER")
+        all_players = current.get("allPlayers", [])
+        for event in events:
+            if event.get("EventName") == "ChampionKill":
+                killer = event.get("KillerName", "")
+                victim = event.get("VictimName", "")
+                killer_player = next((p for p in all_players if p.get("summonerName") == killer), None)
+                if not killer_player:
+                    continue  # skip unknown killer
+                killer_team = killer_player.get("team", "UNKNOWN")
+                self.triggered = True  # ✅ Mark as triggered
+                if killer == your_name:
+                    return f"🩸 First Blood is yours! You just took down {victim} — what a start!"
+                elif killer_team == your_team:
+                    return f"💥 First Blood for your team! {killer} struck first and got {victim}!"
+                else:
+                    return f"⚠️ First Blood goes to the enemy! {killer} eliminated {victim} early!"
         return None
 
 class DragonKillTrigger:
@@ -286,8 +299,10 @@ class GameEndTrigger(GameTrigger):
     """Trigger at end of game with win/loss recap."""
     def __init__(self):
         self.triggered = False
+        self.result = None
     def reset(self):
         self.triggered = False
+        self.result = None
     def check(self, current_data, previous_data):
         if self.triggered:
             return None
@@ -295,8 +310,9 @@ class GameEndTrigger(GameTrigger):
         for event in reversed(events):
             if event.get("EventName") == "GameEnd":
                 self.triggered = True
-                result = event.get("Result", "Unknown")
-                return f"🎬 Game over! Result: {result.upper()}"
+                self.result = event.get("Result", "Unknown").upper()
+                print("[GameEndTrigger] GameEnd event detected")
+                return f"🎬 Game over! Result: {self.result}"
         return None
 
 class GoldDifferenceTrigger(GameTrigger):
@@ -476,6 +492,8 @@ class FeatsOfStrengthTrigger(GameTrigger):
             "first_brick": None,
             "objectives": None
         }
+    def get_triggered_team(self):
+        return self.triggered_team if self.triggered else None
     def check(self, current, previous):
         if self.triggered:
             return None
@@ -539,20 +557,25 @@ class FeatsOfStrengthTrigger(GameTrigger):
         print("[Feats Debug] ORDER progress:", team_progress.get("ORDER", {}))
         print("[Feats Debug] CHAOS progress:", team_progress.get("CHAOS", {}))
         # === Evaluate trigger ===
+        # === Evaluate and lock slots ===
         for team, progress in team_progress.items():
             total_objectives = sum(progress["objectives"].values())
-            conditions_met = 0
-            # 🔒 Lock per slot when achieved
-            if self.locked_slots["kills"] in (None, team) and progress["kills"] >= 3:
+            # Track whether we locked anything new
+            newly_locked = 0
+            if self.locked_slots["kills"] is None and progress["kills"] >= 3:
                 self.locked_slots["kills"] = team
-                conditions_met += 1
-            if self.locked_slots["first_brick"] in (None, team) and progress["first_brick"]:
+                newly_locked += 1
+            if self.locked_slots["first_brick"] is None and progress["first_brick"]:
                 self.locked_slots["first_brick"] = team
-                conditions_met += 1
-            if self.locked_slots["objectives"] in (None, team) and total_objectives >= 3:
+                newly_locked += 1
+            if self.locked_slots["objectives"] is None and total_objectives >= 3:
                 self.locked_slots["objectives"] = team
-                conditions_met += 1
-            if conditions_met >= 2:
+                newly_locked += 1
+        # === Count how many slots each team has locked
+        team_locks = Counter(self.locked_slots.values())
+        # === If any team has 2+ locked slots, trigger
+        for team, count in team_locks.items():
+            if team and count >= 2:
                 self.triggered = True
                 self.triggered_team = team
                 if team == your_team:
@@ -568,3 +591,90 @@ class FeatsOfStrengthTrigger(GameTrigger):
             "team": team,
             "EventID": event.get("EventID")
         })
+
+class StreakTrigger(GameTrigger):
+    def __init__(self):
+        self.streaks = defaultdict(int)
+        self.last_killed_by = {}
+        self.shutdowns = set()
+        self.processed_event_ids = set()
+    def reset(self):
+        self.streaks.clear()
+        self.last_killed_by.clear()
+        self.shutdowns.clear()
+        self.processed_event_ids.clear()
+    def get_player_streak(self, player_name):
+        return self.streaks.get(player_name, 0)
+    def check(self, current, previous):
+        messages = []
+        events = current.get("events", {}).get("Events", [])
+        all_players = current.get("allPlayers", [])
+        your_team = current.get("your_team", "ORDER")
+        your_name = next(
+            (p.get("summonerName") for p in all_players if p.get("team") == your_team and not p.get("isBot", False)),
+            None
+        )
+        name_to_team = {p.get("summonerName"): p.get("team") for p in all_players}
+        def perspective(name):
+            if name == your_name:
+                return "self"
+            elif name_to_team.get(name) == your_team:
+                return "ally"
+            else:
+                return "enemy"
+        icon_map = {
+            "self": "🔥",
+            "ally": "✨",
+            "enemy": "⚠️"
+        }
+        for event in events:
+            if event.get("EventName") != "ChampionKill":
+                continue
+            event_id = event.get("EventID")
+            if event_id in self.processed_event_ids:
+                continue
+            self.processed_event_ids.add(event_id)
+            killer = event.get("KillerName")
+            victim = event.get("VictimName")
+            if not killer or not victim:
+                continue
+            self.streaks[killer] += 1
+            self.streaks[victim] = 0
+            self.last_killed_by[victim] = killer
+            killer_perspective = perspective(killer)
+            victim_perspective = perspective(victim)
+            # 🔥 Streaks
+            streak = self.streaks[killer]
+            tag_map = {
+                3: "Killing Spree",
+                4: "Rampage",
+                5: "UNSTOPPABLE",
+                6: "DOMINATING",
+                7: "GODLIKE"
+            }
+            tag = tag_map.get(streak, "LEGENDARY") if streak >= 3 else None
+            if tag:
+                prefix = icon_map[killer_perspective]
+                if killer_perspective == "self":
+                    messages.append(f"{prefix} You're on a {tag}!")
+                elif killer_perspective == "ally":
+                    messages.append(f"{prefix} Your ally {killer} is on a {tag}!")
+                else:
+                    messages.append(f"{prefix} Enemy {killer} is on a {tag}!")
+            # 💰 Shutdowns
+            if self.streaks[victim] == 0 and victim in self.shutdowns:
+                continue
+            if self.streaks[victim] >= 3:
+                self.shutdowns.add(victim)
+                if killer_perspective == "self":
+                    messages.append(f"💰 You shut down {victim}!")
+                elif killer_perspective == "ally":
+                    messages.append(f"💰 Your ally {killer} shut down {victim}!")
+                else:
+                    if victim_perspective == "self":
+                        messages.append(f"☠️ {killer} shut you down!")
+                    elif victim_perspective == "ally":
+                        messages.append(f"☠️ {killer} shut down your ally {victim}!")
+                    else:
+                        messages.append(f"💰 {killer} shut down {victim}!")
+        return "\n".join(messages) if messages else None

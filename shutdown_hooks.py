@@ -41,6 +41,13 @@ def setup_shutdown_hooks(bot_instance=None, executor=None):
                 overlay_ws_task.cancel()
         except Exception as e:
             print(f"⚠️ Failed to cancel overlay_ws_task cleanly: {e}")
+        try:
+            from zorobot import tts_monitor_task
+            if tts_monitor_task and not tts_monitor_task.done():
+                print("🧹 Cancelling TTS monitor task...")
+                tts_monitor_task.cancel()
+        except Exception as e:
+            print(f"⚠️ Failed to cancel tts_monitor_task cleanly: {e}")
                 
         list_all_threads()
         os._exit(0)
