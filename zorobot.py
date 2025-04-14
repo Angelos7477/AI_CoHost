@@ -29,7 +29,7 @@ import json
 import random
 from utils.game_utils import estimate_team_gold,ensure_item_prices_loaded
 from game_data_monitor import set_callback, game_data_loop, generate_game_recap, get_previous_state, set_triggers, feats_trigger, streak_trigger
-from shared_state import previous_state,inhib_respawn_timer, baron_expire, elder_expire, player_ratings
+from shared_state import previous_state,inhib_respawn_timer, baron_expire, elder_expire, player_ratings,seen_inhib_events
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -391,6 +391,7 @@ async def clear_state_after_delay(delay_seconds=6):
     inhib_respawn_timer["CHAOS"].clear()
     baron_expire.clear()
     elder_expire.clear()
+    seen_inhib_events.clear()
     player_ratings.clear()
     # 🧽 Push cleared overlay state
     await push_power_scores({    # ✅ This clears the panel visually

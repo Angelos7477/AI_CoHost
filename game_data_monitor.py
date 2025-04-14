@@ -6,7 +6,7 @@ import time
 import json
 from utils.game_utils import estimate_team_gold,  power_score, infer_missing_roles
 from triggers.game_triggers import MultikillEventTrigger,FeatsOfStrengthTrigger, StreakTrigger
-from shared_state import previous_state, player_ratings, inhib_respawn_timer, baron_expire, elder_expire
+from shared_state import previous_state, player_ratings, inhib_respawn_timer, baron_expire, elder_expire,seen_inhib_events
 import copy
 from overlay_push import push_power_scores
 
@@ -135,6 +135,7 @@ async def monitor_game_data(callback):
                     baron_expire.clear()
                     elder_expire.clear()
                     player_ratings.clear()
+                    seen_inhib_events.clear()
                     previous_state["game_ended"] = True  # So AskAI still sees "game is over"
                     for trigger in triggers:
                         if hasattr(trigger, "reset"):
@@ -180,10 +181,13 @@ async def monitor_game_data(callback):
                         team = killer_player.get("team", "UNKNOWN")
                         dragon_kills[team] += 1
                 if e["EventName"] == "InhibKilled":
-                    team = get_team_of_killer(e, all_players)
-                    if team:
-                        respawn_time = e["EventTime"] + 300  # 5 minutes
-                        inhib_respawn_timer[team].append(respawn_time)
+                    event_id = f"{e['EventName']}_{e['EventTime']}"  # or use e['EventID'] if it exists
+                    if event_id not in seen_inhib_events:
+                        team = get_team_of_killer(e, all_players)
+                        if team:
+                            respawn_time = e["EventTime"] + 300  # 5 minutes
+                            inhib_respawn_timer[team].append(respawn_time)
+                        seen_inhib_events.add(event_id)
                 if e["EventName"] == "BaronKill":
                     team = get_team_of_killer(e, all_players)
                     if team:
@@ -247,6 +251,7 @@ async def monitor_game_data(callback):
                 inhib_respawn_timer["CHAOS"].clear()
                 baron_expire.clear()
                 elder_expire.clear()
+                seen_inhib_events.clear()
                 player_ratings.clear()
                 for trigger in triggers:
                     if hasattr(trigger, "reset"):
