@@ -330,7 +330,6 @@ async def tts_worker():
             tts_busy = False
             await asyncio.sleep(1.5)  # ⏱️ Small delay to avoid spammy speech
 
-
 async def safe_add_to_tts_queue(item):
     queue_size = tts_queue.qsize()
     is_askai = isinstance(item, tuple) and item[0] == "askai"
@@ -974,7 +973,6 @@ class ZoroTheCasterBot(commands.Bot):
             except Exception as e:
                 log_error(f"[Periodic Commands Reminder ERROR] {e}")
             await asyncio.sleep(interval)
-
 
 # === Run the Bot ===
 if __name__ == "__main__":
