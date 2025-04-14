@@ -328,7 +328,7 @@ async def tts_worker():
         finally:
             tts_queue.task_done()
             tts_busy = False
-            await asyncio.sleep(1.5)  # ⏱️ Small delay to avoid spammy speech
+            await asyncio.sleep(0.5)  # ⏱️ Small delay to avoid spammy speech
 
 async def safe_add_to_tts_queue(item):
     queue_size = tts_queue.qsize()
@@ -347,7 +347,7 @@ async def tts_monitor_loop():
         await asyncio.sleep(0.5)
         if not tts_busy and buffered_game_events:
             print("🧹 TTS is free, flushing buffered game events...")
-            combined = "Commentate on the current game:\n" + "\n".join(buffered_game_events)
+            combined = "Commentate on the current game:\n" + "\n".join(f"{i+1}. {line}" for i, line in enumerate(buffered_game_events))
             log_merged_prompt(combined)
             mode = get_current_mode()
             ai_text = get_ai_response(combined, mode)
@@ -412,6 +412,7 @@ def handle_game_data(data, your_player_data, current_data, merged_results):
     game_time_seconds = current_data["last_game_time"]
     # ✅ Now let TTS play as usual
     if merged_results:
+        is_game_over = any("Game over" in msg for msg in merged_results)
         if not tts_busy and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
             combined_prompt = "Commentate on the current game:\n" + "\n".join(merged_results)
             log_merged_prompt(combined_prompt)
@@ -419,15 +420,14 @@ def handle_game_data(data, your_player_data, current_data, merged_results):
             ai_text = get_ai_response(combined_prompt, mode)
             asyncio.create_task(safe_add_to_tts_queue(("game", "GameMonitor", ai_text)))
             last_game_tts_time = timestamp_now
-            # ✅ After sending TTS, check if game ended and mark state
-            if any("Game over" in msg for msg in merged_results):
-                if previous_state.get("game_ended") is not True:
-                    previous_state["game_ended"] = True
-                    print("🧹 GameEnd detected, starting delayed cleanup...")
-                    asyncio.create_task(clear_state_after_delay())
         elif tts_busy:
             buffered_game_events.extend(merged_results)
             print(f"🧠 TTS busy — buffering {len(merged_results)} merged game lines")
+        # ✅ Always mark game ended if detected (even if we didn’t send TTS yet)
+        if is_game_over and not previous_state.get("game_ended"):
+            previous_state["game_ended"] = True
+            print("🧹 GameEnd detected, starting delayed cleanup...")
+            asyncio.create_task(clear_state_after_delay())
     # Recap logic
     if (timestamp_now - previous_state.get("last_recap_time", 0)) >= AUTO_RECAP_INTERVAL:
         if game_time_seconds < 300:
