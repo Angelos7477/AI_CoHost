@@ -249,6 +249,7 @@ async def tts_worker():
         item = await tts_queue.get()
         try:
             tts_busy = True
+            log_merged_prompt("🟠 TTS state changed: BUSY")
             if isinstance(item, tuple) and item[0] in ("askai", "event", "game"):
                 item_type = item[0]
                 if item_type == "askai":
@@ -329,6 +330,7 @@ async def tts_worker():
         finally:
             tts_queue.task_done()
             tts_busy = False
+            log_merged_prompt(f"🟢 TTS state changed: IDLE | Queue size: {tts_queue.qsize()}")
             await asyncio.sleep(0.5)  # ⏱️ Small delay to avoid spammy speech
 
 async def safe_add_to_tts_queue(item):
