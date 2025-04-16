@@ -14,10 +14,10 @@ COMMENTARY_TEMPLATES = {
         "Explode with excitement about the current game events:",
         "Pump up the audience with an intense reaction to these plays:",
     ],
-    "coach": [
-        "🎓 You're a strategic coach. Break down what just happened:",
-        "Give a calm and professional analysis of the plays below:",
-        "Explain the game situation as if you're on the analyst desk:",
+    "rage": [
+        "🔥 You're absolutely FURIOUS. Rip into what just happened like you're done with this team!",
+        "You're tilted beyond reason. Yell at the team, flame the plays, scream about how bad this is:",
+        "🧨 You're a rage-fueled caster watching a disaster unfold. Vent your frustration brutally:",
     ],
     "sarcastic": [
         "😏 Comment on the game with dry humor and snark:",

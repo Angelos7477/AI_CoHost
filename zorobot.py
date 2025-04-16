@@ -345,7 +345,7 @@ async def safe_add_to_tts_queue(item):
 async def tts_monitor_loop():
     global tts_busy
     while True:
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.4)
         if not tts_busy and buffered_game_events:
             print("🧹 TTS is free, flushing buffered game events...")
             mode = get_current_mode()
@@ -431,6 +431,11 @@ def handle_game_data(data, your_player_data, current_data, merged_results):
     # ✅ Now let TTS play as usual
     if merged_results:
         is_game_over = any("Game over" in msg for msg in merged_results)
+        # ✅ NEW: Prioritize buffered lines first, even if TTS is free
+        if buffered_game_events:
+            buffered_game_events.extend(merged_results)
+            print(f"🧠 Buffering {len(merged_results)} new lines — TTS is free but backlog exists.")
+            return
         if not tts_busy and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
             combined_prompt = get_random_commentary_prompt(mode) +  "\n" + "\n".join(merged_results)
             log_merged_prompt(combined_prompt)
