@@ -12,8 +12,10 @@ load_dotenv()
 def log_obs_event(text: str):
     try:
         timestamp = datetime.now(timezone.utc).isoformat()
-        os.makedirs("logs", exist_ok=True)
-        with open("logs/obs.log", "a", encoding="utf-8") as log_file:
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        log_dir = os.path.join("logs", date_str)
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "obs.log"), "a", encoding="utf-8") as log_file:
             log_file.write(f"[{timestamp}] {text}\n")
     except Exception as e:
         print(f"[ERROR] Failed to write OBS log: {e}")

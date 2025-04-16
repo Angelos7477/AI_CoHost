@@ -30,6 +30,7 @@ import random
 from utils.game_utils import estimate_team_gold,ensure_item_prices_loaded
 from game_data_monitor import set_callback, game_data_loop, generate_game_recap, get_previous_state, set_triggers, feats_trigger, streak_trigger
 from shared_state import previous_state,inhib_respawn_timer, baron_expire, elder_expire, player_ratings,seen_inhib_events
+from prompts.user_prompts import get_random_commentary_prompt, get_random_recap_prompt
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -49,7 +50,7 @@ RIOT_API_KEY = os.getenv("RIOT_API_KEY")
 USE_ELEVENLABS = os.getenv("USE_ELEVENLABS", "true").lower() == "true"
 
 # === Global Configs ===
-VALID_MODES = ["hype", "coach", "sarcastic", "wholesome","troll","smartass","tsundere","edgelord","shakespeare","genz"]
+VALID_MODES = ["hype", "rage", "sarcastic", "wholesome","troll","smartass","tsundere","edgelord","shakespeare","genz"]
 # 🧠 Choose model and voice ID
 ELEVEN_MODEL = "eleven_turbo_v2_5"
 ELEVEN_VOICE_ID = "TxGEqnHWrfWFTfGW9XjX"  # ← keep only as default/fallback
@@ -58,7 +59,7 @@ VOICE_BY_MODE = {
     "hype": "TxGEqnHWrfWFTfGW9XjX",       # Josh
     "smartass": "TxGEqnHWrfWFTfGW9XjX",   # Josh
     "shakespeare": "TxGEqnHWrfWFTfGW9XjX",# Josh
-    "coach": "21m00Tcm4TlvDq8ikWAM",      # Rachel
+    "rage": "21m00Tcm4TlvDq8ikWAM",      # Rachel
     "wholesome": "21m00Tcm4TlvDq8ikWAM",  # Rachel
     "tsundere": "21m00Tcm4TlvDq8ikWAM",   # Rachel
     "genz": "21m00Tcm4TlvDq8ikWAM",       # Rachel
@@ -347,32 +348,48 @@ async def tts_monitor_loop():
         await asyncio.sleep(0.5)
         if not tts_busy and buffered_game_events:
             print("🧹 TTS is free, flushing buffered game events...")
-            combined = "Commentate on the current game:\n" + "\n".join(f"{i+1}. {line}" for i, line in enumerate(buffered_game_events))
-            log_merged_prompt(combined)
             mode = get_current_mode()
-            ai_text = get_ai_response(combined, mode)
+            # ✨ Use dynamic prompt
+            personality_prompt = get_random_commentary_prompt(mode)
+            numbered_debug = "\n".join(f"{i+1}. {line}" for i, line in enumerate(buffered_game_events))
+            # 🧠 For AI
+            combined_prompt = f"{personality_prompt}\n" + "\n".join(buffered_game_events)
+            # 📄 For logs
+            debug_prompt = f"{personality_prompt}\n{numbered_debug}"
+            log_merged_prompt(debug_prompt)
+            ai_text = get_ai_response(combined_prompt, mode)
             await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
             buffered_game_events.clear()
 
+def _get_log_path(log_filename: str) -> str:
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    log_dir = os.path.join("logs", date_str)
+    os.makedirs(log_dir, exist_ok=True)
+    return os.path.join(log_dir, log_filename)
 def log_error(error_text: str):
     timestamp = datetime.now(timezone.utc).isoformat()
-    with open("logs/errors.log", "a", encoding="utf-8") as error_file:
+    path = _get_log_path("errors.log")
+    with open(path, "a", encoding="utf-8") as error_file:
         error_file.write(f"[{timestamp}] {error_text}\n")
 def log_event(text: str):
     timestamp = datetime.now(timezone.utc).isoformat()
-    with open("logs/openai_usage.log", "a", encoding="utf-8") as log_file:
+    path = _get_log_path("openai_usage.log")
+    with open(path, "a", encoding="utf-8") as log_file:
         log_file.write(f"[{timestamp}] {text}\n")
 def log_merged_prompt(text: str):
     timestamp = datetime.now(timezone.utc).isoformat()
-    with open("logs/merged_prompts.log", "a", encoding="utf-8") as f:
+    path = _get_log_path("merged_prompts.log")
+    with open(path, "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {text.strip()}\n")
 def log_recap_prompt(text: str):
     timestamp = datetime.now(timezone.utc).isoformat()
-    with open("logs/recaps.log", "a", encoding="utf-8") as f:
+    path = _get_log_path("recaps.log")
+    with open(path, "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {text.strip()}\n")
 def log_askai_commentary_prompt(text: str):
     timestamp = datetime.now(timezone.utc).isoformat()
-    with open("logs/askai_commentary.log", "a", encoding="utf-8") as f:
+    path = _get_log_path("askai_commentary.log")
+    with open(path, "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {text.strip()}\n")
 
 def is_game_related(question: str):
@@ -410,13 +427,13 @@ def handle_game_data(data, your_player_data, current_data, merged_results):
     global last_game_tts_time, buffered_game_events, tts_busy
     timestamp_now = time.time()
     game_time_seconds = current_data["last_game_time"]
+    mode = get_current_mode()
     # ✅ Now let TTS play as usual
     if merged_results:
         is_game_over = any("Game over" in msg for msg in merged_results)
         if not tts_busy and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
-            combined_prompt = "Commentate on the current game:\n" + "\n".join(merged_results)
+            combined_prompt = get_random_commentary_prompt(mode) +  "\n" + "\n".join(merged_results)
             log_merged_prompt(combined_prompt)
-            mode = get_current_mode()
             ai_text = get_ai_response(combined_prompt, mode)
             asyncio.create_task(safe_add_to_tts_queue(("game", "GameMonitor", ai_text)))
             last_game_tts_time = timestamp_now
@@ -436,9 +453,9 @@ def handle_game_data(data, your_player_data, current_data, merged_results):
         last_snapshot = previous_state.get("last_recap_snapshot") or previous_state.copy()
         recap_text = generate_game_recap(data, your_player_data, data.get("activePlayer", {}), last_snapshot, current_data["dragon_kills"])
         if recap_text:
-            recap_prompt = "Give a short, energetic recap of the current game:\n" + recap_text
+            recap_prompt = get_random_recap_prompt() + "\n" + recap_text
             log_recap_prompt(recap_prompt)  # 🧼 New log file!
-            ai_text = get_ai_response(recap_prompt, get_current_mode())
+            ai_text = get_ai_response(recap_prompt, mode)
             asyncio.create_task(safe_add_to_tts_queue(("game", "GameRecap", ai_text)))
             previous_state["last_recap_time"] = timestamp_now
             previous_state["last_recap_snapshot"] = {
