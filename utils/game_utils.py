@@ -161,8 +161,8 @@ def power_score(player, enemy_laner=None, team_data=None, game_time_minutes=1, v
                 debug_log.append(f"[{name}] Atakan (temp) {atakan_temp} → +{atakan_score}")
         void_grubs = td.get("void_grubs", 0)
         vg_score = void_grubs
-        if void_grubs >= 4:
-            vg_score += 3
+        if void_grubs >= 3:
+            vg_score += 5
         if void_grubs == 6:
             vg_score += 3
         score += vg_score

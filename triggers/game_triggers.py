@@ -538,12 +538,12 @@ class FeatsOfStrengthTrigger(GameTrigger):
         while self.voidgrub_sets_checked < new_sets:
             start = self.voidgrub_sets_checked * 3
             set_kills = self.horde_kill_buffer[start:start+3]
-            teams = {entry["team"] for entry in set_kills}
-            if len(teams) == 1:
-                team = next(iter(teams))
-                if self.voidgrub_objective_counts[team] < 2:
-                    self.voidgrub_objective_counts[team] += 1
-                    self.team_objectives[team]["Voidgrub"] += 1
+            team_counts = Counter(entry["team"] for entry in set_kills)
+            most_common_team, count = team_counts.most_common(1)[0]
+            if count >= 2:
+                if self.voidgrub_objective_counts[most_common_team] < 2:
+                    self.voidgrub_objective_counts[most_common_team] += 1
+                    self.team_objectives[most_common_team]["Voidgrub"] += 1
             self.voidgrub_sets_checked += 1
         # ✅ Ensure progress is present for both teams
         for team in ["ORDER", "CHAOS"]:
@@ -610,8 +610,8 @@ class StreakTrigger(GameTrigger):
         events = current.get("events", {}).get("Events", [])
         all_players = current.get("allPlayers", [])
         your_team = current.get("your_team", "ORDER")
-        your_name = next(
-            (p.get("summonerName") for p in all_players if p.get("team") == your_team and not p.get("isBot", False)),
+        your_name = current.get("your_name") or next(
+            (p.get("summonerName") for p in all_players if p.get("team") == current.get("your_team", "ORDER") and not p.get("isBot", False)),
             None
         )
         name_to_team = {p.get("summonerName"): p.get("team") for p in all_players}
