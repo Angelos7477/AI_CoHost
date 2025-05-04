@@ -610,10 +610,7 @@ class StreakTrigger(GameTrigger):
         events = current.get("events", {}).get("Events", [])
         all_players = current.get("allPlayers", [])
         your_team = current.get("your_team", "ORDER")
-        your_name = current.get("your_name") or next(
-            (p.get("summonerName") for p in all_players if p.get("team") == current.get("your_team", "ORDER") and not p.get("isBot", False)),
-            None
-        )
+        your_name = current.get("your_name", "")
         name_to_team = {p.get("summonerName"): p.get("team") for p in all_players}
         def perspective(name):
             if name == your_name:

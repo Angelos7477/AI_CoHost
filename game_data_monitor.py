@@ -273,6 +273,7 @@ async def monitor_game_data(callback):
                     "last_cs_milestone": (cs // 70) * 70,
                     "total_kills": total_kills,
                     "your_team": your_team,
+                    "your_name": your_player_data.get("summonerName"),  # ✅ This fixes your StreakTrigger!
                     "dragon_kills": dragon_kills,
                     "last_game_time": game_time_seconds,
                     "initialized": True,
@@ -299,6 +300,7 @@ async def monitor_game_data(callback):
                 "timestamp": timestamp_now,
                 "total_kills": total_kills,
                 "your_team": your_team,
+                "your_name": your_player_data.get("summonerName"),  # ✅ This fixes your StreakTrigger!
                 "dragon_kills": dragon_kills,
                 "last_game_time": game_time_seconds,
                 "gold_diff": gold_diff,
