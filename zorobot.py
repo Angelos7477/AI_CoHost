@@ -29,8 +29,9 @@ import json
 import random
 from utils.game_utils import estimate_team_gold,ensure_item_prices_loaded
 from game_data_monitor import set_callback, game_data_loop, generate_game_recap, get_previous_state, set_triggers, feats_trigger, streak_trigger
-from shared_state import previous_state,inhib_respawn_timer, baron_expire, elder_expire, player_ratings,seen_inhib_events
+from shared_state import previous_state,inhib_respawn_timer, baron_expire, elder_expire, player_ratings,seen_inhib_events,tracker  
 from prompts.user_prompts import get_random_commentary_prompt, get_random_recap_prompt
+from memory_manager import add_to_memory,query_memory_relevant
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -170,11 +171,31 @@ def load_system_prompt(mode):
     
 def get_ai_response(prompt, mode):
     system_prompt = load_system_prompt(mode)
+    # 🧠 Get recent relevant memories
+    try:
+        # 🧠 Search memory
+        memory_chunks = query_memory_relevant(prompt)
+    except Exception as e:
+        log_error(f"[Memory Query ERROR] {e}")
+        memory_chunks = []
+    # 📦 Build memory context or fallback
+    if memory_chunks:
+        memory_text = "\n\n".join(
+            f"🧠 {mem}\n📎 Metadata: {json.dumps(meta, ensure_ascii=False)}"
+            for mem, meta in memory_chunks
+        )
+    else:
+        memory_text = "⚠️ No relevant memory context found."
+    enhanced_prompt = (
+        f"You have access to the following recent memories from the stream:\n"
+        f"{memory_text}\n\n"
+        f"Now answer the user question:\n{prompt}"
+    )
     response = client.chat.completions.create(
         model="gpt-4o",  #gpt-4o , gpt-3.5-turbo
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
+            {"role": "user", "content": enhanced_prompt}
         ],
         max_tokens=150,
         temperature=0.7,
@@ -196,6 +217,17 @@ def get_ai_response(prompt, mode):
         asyncio.create_task(push_cost_increment(cost))  # We’ll define this
     except Exception as e:
         log_error(f"[Overlay Cost Push ERROR] {e}")
+        # 📝 Log full prompt and response
+    try:
+        full_ai_output_log = (
+            f"🔎 [AI RESPONSE LOG]\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{enhanced_prompt}\n\n"
+            f"AI Response:\n{response.choices[0].message.content}\n"
+        )
+        log_ai_response(full_ai_output_log)
+    except Exception as e:
+        log_error(f"[AI Log Error] {e}")
     return response.choices[0].message.content
 
 def estimate_cost(model, prompt_tokens, completion_tokens):
@@ -393,6 +425,18 @@ def log_askai_commentary_prompt(text: str):
     path = _get_log_path("askai_commentary.log")
     with open(path, "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {text.strip()}\n")
+def log_askai_question(user: str, question: str, answer: str):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    path = _get_log_path("askai.log")
+    log_entry = f"[{timestamp}] {user}: Q: {question} | A: {answer.strip()}\n"
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(log_entry)
+def log_ai_response(text):
+    path = _get_log_path("askai_full.log")
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {text}\n\n")
+
 
 def is_game_related(question: str):
     q = question.lower()
@@ -890,10 +934,6 @@ class ZoroTheCasterBot(commands.Bot):
         if askai_queue.qsize() >= ASKAI_TTS_RESERVED_LIMIT:
             await ctx.send("🚫 AskAI is currently overloaded with responses. Please try again soon.")
             return
-        # Log question to file
-        timestamp = datetime.now(timezone.utc).isoformat()
-        with open("logs/askai_log.txt", "a", encoding="utf-8") as log_file:
-            log_file.write(f"[{timestamp}] {user}: {question}\n")
         if "commentate" in question.lower() or "comentate" in question.lower() or "commentary" in question.lower():
             current_state = get_previous_state()
             full_prompt = f"Commentate on the current game:\n{self.build_game_context(current_state)}\n\n🧠 {user} asked: {question}"
@@ -901,21 +941,31 @@ class ZoroTheCasterBot(commands.Bot):
             log_askai_commentary_prompt(full_prompt)
         else:
             full_prompt = f"{user} asked: {question}"
-        await askai_queue.put((user, full_prompt))
+        await askai_queue.put((user, question, full_prompt))
         # ✅ Set cooldown timestamp for this user
         askai_cooldowns[user] = now
         await ctx.send(f"🧠 {user}, your question is queued at position #{askai_queue.qsize()}")
 
     async def process_askai_queue(self):
         while True:
-            user, question = await askai_queue.get()
+            user, raw_question, question = await askai_queue.get()
             mode = get_current_mode()
             try:
                 ai_text = get_ai_response(question, mode)
+                # ✅ Add to memory only after getting a valid response
+                add_to_memory(
+                    content=f"Q: {raw_question}\nA: {ai_text}",
+                    type_="askai",
+                    stream_date=tracker.get_stream_date(),
+                    game_number=tracker.get_game_number(),
+                    metadata={
+                        "user": user,
+                        "source": "askai"
+                    }
+                )
                 print(f"[ZoroTheCaster AI Answer - {mode.upper()}]:", ai_text)
-                # Send (user, ai_text) tuple to tts_queue instead of plain text
                 await safe_add_to_tts_queue(("askai", user, question, ai_text))
-            # ✅ Write to askai_data.txt for HTML/CSS Overlay (OBS Browser Source)
+                log_askai_question(user, raw_question, ai_text)
             except Exception as e:
                 error_msg = f"Error in askai processing for {user}: {e}"
                 print(f"❌ {error_msg}")
@@ -923,6 +973,7 @@ class ZoroTheCasterBot(commands.Bot):
                 await self.send_to_chat(f"❌ {user}, something went wrong with the AI response.")
             askai_queue.task_done()
             await asyncio.sleep(ASKAI_QUEUE_DELAY)
+
 
     async def send_to_chat(self, message):
         try:
