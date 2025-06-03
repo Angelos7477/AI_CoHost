@@ -894,7 +894,7 @@ class ZoroTheCasterBot(commands.Bot):
         timestamp = datetime.now(timezone.utc).isoformat()
         with open("logs/askai_log.txt", "a", encoding="utf-8") as log_file:
             log_file.write(f"[{timestamp}] {user}: {question}\n")
-        if "commentate" in question.lower():
+        if "commentate" in question.lower() or "comentate" in question.lower() or "commentary" in question.lower():
             current_state = get_previous_state()
             full_prompt = f"Commentate on the current game:\n{self.build_game_context(current_state)}\n\n🧠 {user} asked: {question}"
             print("[ASKAI] current_state snapshot:", json.dumps(current_state, indent=2))
@@ -902,6 +902,8 @@ class ZoroTheCasterBot(commands.Bot):
         else:
             full_prompt = f"{user} asked: {question}"
         await askai_queue.put((user, full_prompt))
+        # ✅ Set cooldown timestamp for this user
+        askai_cooldowns[user] = now
         await ctx.send(f"🧠 {user}, your question is queued at position #{askai_queue.qsize()}")
 
     async def process_askai_queue(self):
