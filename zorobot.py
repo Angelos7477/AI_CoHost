@@ -28,10 +28,10 @@ from elevenlabs import play, VoiceSettings
 import json
 import random
 from utils.game_utils import estimate_team_gold,ensure_item_prices_loaded
+from memory_manager import add_to_memory,query_memory_relevant
 from game_data_monitor import set_callback, game_data_loop, generate_game_recap, get_previous_state, set_triggers, feats_trigger, streak_trigger
 from shared_state import previous_state,inhib_respawn_timer, baron_expire, elder_expire, player_ratings,seen_inhib_events,tracker  
 from prompts.user_prompts import get_random_commentary_prompt, get_random_recap_prompt
-from memory_manager import add_to_memory,query_memory_relevant
 
 # === Load Environment Variables ===
 load_dotenv()
