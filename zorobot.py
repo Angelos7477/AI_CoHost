@@ -28,7 +28,7 @@ from elevenlabs import play, VoiceSettings
 import json
 import random
 from utils.game_utils import estimate_team_gold,ensure_item_prices_loaded
-from memory_manager import add_to_memory,query_memory_relevant
+from memory_manager import add_to_memory,query_memory_relevant,should_store_memory,summarize_interaction,should_query_memory
 from game_data_monitor import set_callback, game_data_loop, generate_game_recap, get_previous_state, set_triggers, feats_trigger, streak_trigger
 from shared_state import previous_state,inhib_respawn_timer, baron_expire, elder_expire, player_ratings,seen_inhib_events,tracker  
 from prompts.user_prompts import get_random_commentary_prompt, get_random_recap_prompt
@@ -169,12 +169,14 @@ def load_system_prompt(mode):
     except FileNotFoundError:
         return "You are a witty League of Legends commentator."
     
-def get_ai_response(prompt, mode):
+def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
     system_prompt = load_system_prompt(mode)
-    # 🧠 Get recent relevant memories
+    # 🧠 Retrieve memory context
     try:
-        # 🧠 Search memory
-        memory_chunks = query_memory_relevant(prompt)
+        #if should_query_memory(prompt):
+        memory_chunks = query_memory_relevant(prompt, user=user)
+        #else:
+        #    memory_chunks = []
     except Exception as e:
         log_error(f"[Memory Query ERROR] {e}")
         memory_chunks = []
@@ -189,7 +191,14 @@ def get_ai_response(prompt, mode):
     enhanced_prompt = (
         f"You have access to the following recent memories from the stream:\n"
         f"{memory_text}\n\n"
-        f"Now answer the user question:\n{prompt}"
+        f"Now, answer the user question **AND** help manage memory.\n\n"
+        f"User asked:\n{prompt}\n\n"
+        f"Respond in JSON like this:\n"
+        '{\n'
+        '  "answer": "Here is the AI response...",\n'
+        '  "store": true or false (boolean),\n'
+        '  "summary": "Brief memory-worthy summary of what the user said."\n'
+        '}\n'
     )
     response = client.chat.completions.create(
         model="gpt-4o",  #gpt-4o , gpt-3.5-turbo
@@ -197,11 +206,28 @@ def get_ai_response(prompt, mode):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": enhanced_prompt}
         ],
-        max_tokens=150,
+        response_format={"type": "json_object"},  # ✅ correct for openai>=1.x
+        max_tokens=200,
         temperature=0.7,
         frequency_penalty=0.3,
         presence_penalty=0.3
     )
+    try:
+        parsed = json.loads(response.choices[0].message.content)
+        ai_text = parsed.get("answer", "").strip()
+        if enable_memory and parsed.get("store") and parsed.get("summary"):
+            add_to_memory(
+                content=parsed["summary"],
+                type_=type_,
+                stream_date=tracker.get_stream_date(),
+                game_number=tracker.get_game_number(),
+                metadata={"user": user, "source": type_}
+            )
+            log_event2(f"[Memory Stored] Summary: {parsed['summary']}")
+    except Exception as e:
+        raw_output = response.choices[0].message.content.strip()
+        log_error(f"[Merged Memory Error] {e} | Raw: {raw_output}")
+        ai_text = raw_output  # fallback
     # Log token usage & estimate cost
     usage = response.usage
     total_tokens = usage.total_tokens
@@ -228,7 +254,8 @@ def get_ai_response(prompt, mode):
         log_ai_response(full_ai_output_log)
     except Exception as e:
         log_error(f"[AI Log Error] {e}")
-    return response.choices[0].message.content
+    return ai_text
+    #return response.choices[0].message.content
 
 def estimate_cost(model, prompt_tokens, completion_tokens):
     if model.startswith("gpt-3.5-turbo"):
@@ -248,7 +275,7 @@ def get_event_reaction(event_type, user):
         "gift": f"{user} gifted a sub! React like it’s a game-winning teamfight.",
         "giftmass": f"{user} just launched a gift sub train! React like the Nexus is exploding!",
     }.get(event_type, f"{user} triggered an unknown event. React accordingly.")
-    return get_ai_response(base_prompt, get_current_mode())
+    return get_ai_response(prompt=base_prompt, mode=get_current_mode(), user=user, type_="event", enable_memory=False)
 
 def speak_sync(text, voice_id=ELEVEN_VOICE_ID):
     if USE_ELEVENLABS:
@@ -391,7 +418,7 @@ async def tts_monitor_loop():
             # 📄 For logs
             debug_prompt = f"{personality_prompt}\n{numbered_debug}"
             log_merged_prompt(debug_prompt)
-            ai_text = get_ai_response(combined_prompt, mode)
+            ai_text = get_ai_response(prompt=combined_prompt, mode=mode, user="GameMonitor", type_="game")
             await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
             buffered_game_events.clear()
 
@@ -436,6 +463,11 @@ def log_ai_response(text):
     timestamp = datetime.now(timezone.utc).isoformat()
     with open(path, "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {text}\n\n")
+def log_event2(message: str):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    path = _get_log_path("events.log")
+    with open(path, "a", encoding="utf-8") as log_file:
+        log_file.write(f"[{timestamp}] {message}\n")
 
 
 def is_game_related(question: str):
@@ -485,7 +517,7 @@ def handle_game_data(data, your_player_data, current_data, merged_results):
         if not tts_busy and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
             combined_prompt = get_random_commentary_prompt(mode) +  "\n" + "\n".join(merged_results)
             log_merged_prompt(combined_prompt)
-            ai_text = get_ai_response(combined_prompt, mode)
+            ai_text = get_ai_response(prompt=combined_prompt, mode=mode, user="GameMonitor", type_="Game")
             asyncio.create_task(safe_add_to_tts_queue(("game", "GameMonitor", ai_text)))
             last_game_tts_time = timestamp_now
         elif tts_busy:
@@ -506,7 +538,7 @@ def handle_game_data(data, your_player_data, current_data, merged_results):
         if recap_text:
             recap_prompt = get_random_recap_prompt() + "\n" + recap_text
             log_recap_prompt(recap_prompt)  # 🧼 New log file!
-            ai_text = get_ai_response(recap_prompt, mode)
+            ai_text = get_ai_response(prompt=recap_prompt, mode=mode, user="RecapEngine", type_="recap", enable_memory=True)
             asyncio.create_task(safe_add_to_tts_queue(("game", "GameRecap", ai_text)))
             previous_state["last_recap_time"] = timestamp_now
             previous_state["last_recap_snapshot"] = {
@@ -528,7 +560,7 @@ async def start_commentator_mode(interval_sec=60):
             previous_mode = mode
         prompt = "Comment on the current state of the game with your personality."
         try:
-            ai_text = get_ai_response(prompt, mode)
+            ai_text = get_ai_response(prompt, mode, user="Commentator", type_="commentate")
             print(f"[ZoroTheCaster - {mode.upper()}]:", ai_text)
             await safe_add_to_tts_queue(ai_text)
         except Exception as e:
@@ -951,18 +983,20 @@ class ZoroTheCasterBot(commands.Bot):
             user, raw_question, question = await askai_queue.get()
             mode = get_current_mode()
             try:
-                ai_text = get_ai_response(question, mode)
-                # ✅ Add to memory only after getting a valid response
-                add_to_memory(
-                    content=f"Q: {raw_question}\nA: {ai_text}",
-                    type_="askai",
-                    stream_date=tracker.get_stream_date(),
-                    game_number=tracker.get_game_number(),
-                    metadata={
-                        "user": user,
-                        "source": "askai"
-                    }
-                )
+                ai_text = get_ai_response(prompt=question, mode=mode, user=user,type_="askai")
+                # ✅ Memory filtering: let AI decide if it should be stored
+#                if should_store_memory(raw_question):  # <-- Use raw user input only
+#                    summary = summarize_interaction(raw_question)  # No AI answer included
+#                    add_to_memory(
+#                        content=summary,
+#                        type_="askai",
+#                        stream_date=tracker.get_stream_date(),
+#                        game_number=tracker.get_game_number(),
+#                        metadata={
+#                            "user": user,
+#                            "source": "askai"
+#                        }
+#                    )
                 print(f"[ZoroTheCaster AI Answer - {mode.upper()}]:", ai_text)
                 await safe_add_to_tts_queue(("askai", user, question, ai_text))
                 log_askai_question(user, raw_question, ai_text)
