@@ -7,6 +7,12 @@ from openai import OpenAI
 import uuid
 import os
 from datetime import datetime, timezone
+import time
+import asyncio
+
+# Cooldown map to prevent redundant summaries
+_memory_summary_cooldowns = {}
+SUMMARY_COOLDOWN_SECONDS = 300  # 5 minutes
 
 openai_api_key = os.getenv("OPENAI_API_KEY")
 openai_client = OpenAI(api_key=openai_api_key)
@@ -57,7 +63,6 @@ def add_to_memory(content, type_, stream_date, game_number, metadata=None):
     game_id = get_current_game_id(stream_date, game_number)
     embedding = generate_embedding(content)
     entry_id = str(uuid.uuid4())
-    
     full_metadata = {
         "type": type_,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -67,7 +72,6 @@ def add_to_memory(content, type_, stream_date, game_number, metadata=None):
     }
     if metadata:
         full_metadata.update(metadata)
-
     collection.add(
         documents=[content],
         metadatas=[full_metadata],
@@ -75,28 +79,11 @@ def add_to_memory(content, type_, stream_date, game_number, metadata=None):
         embeddings=[embedding]
     )
 
-def query_memory(query_text, game_id=None, type_filter=None, n_results=5):
-    embedding = generate_embedding(query_text)
-    filters = {}
-    if game_id:
-        filters["game_id"] = game_id
-    if type_filter:
-        filters["type"] = type_filter
-
-    results = collection.query(
-        query_embeddings=[embedding],
-        n_results=n_results,
-        where=filters if filters else None
-    )
-    return {
-        "documents": results.get("documents", []),
-        "metadatas": results.get("metadatas", [])
-    }
-
-def query_memory_relevant(prompt, user=None, top_k_user=2, top_k_global=1):
+def query_memory_relevant(prompt, user=None, top_k_user=4, top_k_global=2):
     try:
         results = []
-        # 🧠 1. Try user-specific results
+        seen_docs = set()  # track to avoid duplicates
+        # 🧠 1. User-specific results
         user_docs = []
         user_metas = []
         if user:
@@ -107,54 +94,44 @@ def query_memory_relevant(prompt, user=None, top_k_user=2, top_k_global=1):
             )
             user_docs = user_results.get("documents", [[]])[0]
             user_metas = user_results.get("metadatas", [[]])[0]
-            results.extend(zip(user_docs, user_metas))
-        # 🧠 2. Global results (initial)
+            for doc, meta in zip(user_docs, user_metas):
+                if doc not in seen_docs:
+                    results.append((doc, meta))
+                    seen_docs.add(doc)
+        # 🧠 2. Global results (skip duplicates)
         global_results = collection.query(
             query_texts=[prompt],
-            n_results=top_k_global,
+            n_results=top_k_global + 2,  # overfetch in case of duplicates
             where=None
         )
         global_docs = global_results.get("documents", [[]])[0]
         global_metas = global_results.get("metadatas", [[]])[0]
-        results.extend(zip(global_docs, global_metas))
-        # 🧠 3. Fallback: If no user results, get extra from global
+        for doc, meta in zip(global_docs, global_metas):
+            if doc not in seen_docs:
+                results.append((doc, meta))
+                seen_docs.add(doc)
+            if len(seen_docs) >= top_k_user + top_k_global:
+                break
+        # 🧠 3. Fallback (only if user returned nothing)
         if user and not user_docs:
             fallback_results = collection.query(
                 query_texts=[prompt],
-                n_results=top_k_user,  # same as original user quota
+                n_results=top_k_user,
                 where=None
             )
             fallback_docs = fallback_results.get("documents", [[]])[0]
             fallback_metas = fallback_results.get("metadatas", [[]])[0]
-            results.extend(zip(fallback_docs, fallback_metas))
+            for doc, meta in zip(fallback_docs, fallback_metas):
+                if doc not in seen_docs:
+                    results.append((doc, meta))
+                    seen_docs.add(doc)
+                if len(seen_docs) >= top_k_user + top_k_global:
+                    break
         return results
     except Exception as e:
         log_error(f"[Memory Query ERROR] {e}")
         return []
 
-
-
-
-#def get_relevant_memories(prompt, n=10):
- #   try:
-  #      query_embedding = generate_embedding(prompt)
-   #     results = collection.query(
-    #        query_embeddings=[query_embedding],
-     #       n_results=n,
-     ##   )
-     #   docs = results["documents"][0]
-     #   metas = results["metadatas"][0]
-     #   # Sort by timestamp descending
-     #   sorted_pairs = sorted(
-     #       zip(docs, metas),
-     #       key=lambda x: x[1].get("timestamp", ""),
-     #       reverse=True
-#        )
-#        return sorted_pairs[:5]  # Top 5 most recent relevant
- #   except Exception as e:
-  ##      log_error(f"[Memory Query ERROR] {e}")
-    #    return []
-    
 def clear_memory():
     collection.delete(where={})  # Clears all entries
 
@@ -175,46 +152,6 @@ def debug_print_memory(n=10):
             print(f"Content: {doc}")
     except Exception as e:
         print(f"⚠️ Failed to print memory: {e}")
-
-def should_store_memory(prompt):
-    try:
-        check_prompt = (
-            "You are a memory manager. Determine if the following user message is important enough to store for later reference.\n"
-            "Reply only with true or false.\n\n"
-            f"User: {prompt}\n\nShould this be remembered?"
-        )
-        result = openai_client.chat.completions.create(
-            model="gpt-4o",  #gpt-4o  ,gpt-3.5-turbo
-            messages=[{"role": "user", "content": check_prompt}],
-            max_tokens=25,
-            temperature=0
-        )
-        answer = result.choices[0].message.content.strip().lower()
-        log_event(f"[Memory Decision] Prompt: {prompt} → Store: {answer}")
-        return "true" in answer
-    except Exception as e:
-        log_error(f"[should_store_memory ERROR] {e}")
-        return False
-
-def summarize_interaction(prompt):
-    try:
-        summary_prompt = (
-            "You are a memory system. Summarize this user input clearly and extract facts when possible. Focus on identity, personal facts, or recurring themes.\n"
-            "Be specific.\n\n"
-            f"User: {prompt}\n\nSummary:"
-        )
-        result = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": summary_prompt}],
-            max_tokens=100,
-            temperature=0.5
-        )
-        summary = result.choices[0].message.content.strip()
-        log_event(f"[Memory Summary] From: {prompt} → Summary: {summary}")
-        return summary
-    except Exception as e:
-        log_error(f"[summarize_interaction ERROR] {e}")
-        return prompt[:100]  # fallback: return trimmed user message
     
 def should_query_memory(prompt):
     try:
@@ -237,3 +174,105 @@ def should_query_memory(prompt):
         log_error(f"[should_query_memory ERROR] {e}")
         return False
 
+def count_user_memories(user, type_="askai"):
+    try:
+        # Step 1: filter only by user (one field max)
+        results = collection.get(where={"user": user})
+        # Step 2: manually filter by type
+        docs = results.get("documents", [])
+        metas = results.get("metadatas", [])
+        # Only keep those with the correct type
+        filtered = [
+            doc for doc, meta in zip(docs, metas)
+            if meta.get("type") == type_
+        ]
+        return len(filtered)
+    except Exception as e:
+        log_error(f"[count_user_memories ERROR] {e}")
+        return 0
+
+def summarize_and_replace_user_memories(user, type_="askai"):
+    try:
+        # Step 1: Fetch all memories for this user (one filter only)
+        results = collection.get(where={"user": user})
+        docs = results.get("documents", [])
+        ids = results.get("ids", [])
+        metas = results.get("metadatas", [])
+        # Step 2: Filter by type manually
+        filtered = [
+            (doc, id_, meta) for doc, id_, meta in zip(docs, ids, metas)
+            if meta.get("type") == type_
+        ]
+        if len(filtered) < 5:
+            return  # no need to summarize 4 or fewer memories
+        memory_blob = "\n".join([f"- {doc}" for doc, _, _ in filtered])
+        log_event(f"[Memory Summary Source] For {user}:\n{memory_blob}")
+        summarization_prompt = (
+            "Summarize the following user facts into a single memory entry. "
+            "Keep only useful or recurring facts.\n\n"
+            f"{memory_blob}\n\n"
+            "Return a concise bullet-point list of facts (e.g., name, partner, TTS mode, preferences)."
+        )
+        result = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": summarization_prompt}],
+            max_tokens=200,
+            temperature=0.3
+        )
+        summary = result.choices[0].message.content.strip()
+        # Step 3: Delete old memories
+        delete_ids = [id_ for _, id_, _ in filtered]
+        collection.delete(ids=delete_ids)
+        # Step 4: Store summarized memory
+        add_to_memory(
+            content=summary,
+            type_=type_,
+            stream_date=datetime.now().date().isoformat(),
+            game_number=0,
+            metadata={"user": user, "source": type_}
+        )
+        log_event(f"[Memory Summary] Created summary for {user}: {summary}")
+    except Exception as e:
+        log_error(f"[summarize_and_replace_user_memories ERROR] {e}")
+
+async def summarize_and_replace_user_memories_async(user, type_="askai"):
+    now_ts = time.time()
+    last_ts = _memory_summary_cooldowns.get(user)
+    if last_ts and now_ts - last_ts < SUMMARY_COOLDOWN_SECONDS:
+        return  # 🕒 Still cooling down
+    _memory_summary_cooldowns[user] = now_ts
+    await asyncio.to_thread(summarize_and_replace_user_memories, user, type_)
+
+
+def query_memory_for_game(prompt, game_id, top_k=5):
+    try:
+        # Step 1: Query only using game_id
+        results = collection.query(
+            query_texts=[prompt],
+            n_results=top_k ,  # Fetch extra to allow filtering
+            where={"game_id": game_id}
+        )
+        docs = results.get("documents", [[]])[0]
+        metas = results.get("metadatas", [[]])[0]
+        # 🔍 Log the raw metadata for inspection
+        for meta in metas:
+            log_event(f"[DEBUG GameMeta] {meta}")
+        # Step 2: Filter to allowed users
+        allowed_users = {"GameMonitor", "RecapEngine"}
+        filtered = [
+            (doc, meta)
+            for doc, meta in zip(docs, metas)
+            if meta.get("user") in allowed_users and meta.get("game_id") == game_id
+        ]
+        return filtered[:top_k]
+    except Exception as e:
+        log_error(f"[Game Memory Query ERROR] {e}")
+        return []
+
+def query_memory_for_askai(prompt, user, top_k_user=4, top_k_global=2):
+    return query_memory_relevant(prompt, user=user, top_k_user=top_k_user, top_k_global=top_k_global)
+
+def query_memory_for_type(prompt, type_, user, game_id=None):
+    if type_ in ["game", "recap"]:
+        return query_memory_for_game(prompt, game_id)
+    return query_memory_for_askai(prompt, user)

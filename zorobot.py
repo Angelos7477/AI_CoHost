@@ -28,7 +28,8 @@ from elevenlabs import play, VoiceSettings
 import json
 import random
 from utils.game_utils import estimate_team_gold,ensure_item_prices_loaded
-from memory_manager import add_to_memory,query_memory_relevant,should_store_memory,summarize_interaction,should_query_memory
+from memory_manager import (add_to_memory,query_memory_relevant,count_user_memories, summarize_and_replace_user_memories_async, get_current_game_id,
+                            query_memory_for_type)
 from game_data_monitor import set_callback, game_data_loop, generate_game_recap, get_previous_state, set_triggers, feats_trigger, streak_trigger
 from shared_state import previous_state,inhib_respawn_timer, baron_expire, elder_expire, player_ratings,seen_inhib_events,tracker  
 from prompts.user_prompts import get_random_commentary_prompt, get_random_recap_prompt
@@ -74,7 +75,7 @@ voted_users = set()  # Track users who already voted this round
 tts_lock = asyncio.Lock()
 tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 tts_queue = asyncio.Queue()
-ASKAI_COOLDOWN_SECONDS = 40
+ASKAI_COOLDOWN_SECONDS = 20
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
 VOTING_DURATION = 300
@@ -173,32 +174,31 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
     system_prompt = load_system_prompt(mode)
     # 🧠 Retrieve memory context
     try:
-        #if should_query_memory(prompt):
-        memory_chunks = query_memory_relevant(prompt, user=user)
-        #else:
-        #    memory_chunks = []
+        if type_ in ["game", "recap"]:
+            game_id = get_current_game_id(tracker.get_stream_date(), tracker.get_game_number())
+            memory_chunks = query_memory_for_type(prompt, type_, user, game_id)
+        else:
+            memory_chunks = query_memory_for_type(prompt, type_, user)
     except Exception as e:
         log_error(f"[Memory Query ERROR] {e}")
         memory_chunks = []
     # 📦 Build memory context or fallback
     if memory_chunks:
-        memory_text = "\n\n".join(
-            f"🧠 {mem}\n📎 Metadata: {json.dumps(meta, ensure_ascii=False)}"
-            for mem, meta in memory_chunks
-        )
+        memory_text = "\n\n".join(f"🧠 {mem}" for mem, _ in memory_chunks)
     else:
         memory_text = "⚠️ No relevant memory context found."
     enhanced_prompt = (
         f"You have access to the following recent memories from the stream:\n"
         f"{memory_text}\n\n"
-        f"Now, answer the user question **AND** help manage memory.\n\n"
+        f"Now answer the user's question **and decide whether any new information should be added to memory**.\n\n"
         f"User asked:\n{prompt}\n\n"
-        f"Respond in JSON like this:\n"
-        '{\n'
-        '  "answer": "Here is the AI response...",\n'
-        '  "store": true or false (boolean),\n'
-        '  "summary": "Brief memory-worthy summary of what the user said."\n'
-        '}\n'
+        f"Respond in this JSON format:\n"
+        "{\n"
+        '  "answer": "The response the AI should say out loud or show to the user.",\n'
+        '  "store": true or false,  // true if the user provided a new, useful fact\n'
+        '  "summary": "If storing, extract a concise, factual memory (e.g., a name, preference, stat, relationship). Do NOT summarize the question."\n'
+        "}\n\n"
+        "✅ Only extract and store *useful knowledge*, not a paraphrase of the question.\n"
     )
     response = client.chat.completions.create(
         model="gpt-4o",  #gpt-4o , gpt-3.5-turbo
@@ -224,6 +224,13 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
                 metadata={"user": user, "source": type_}
             )
             log_event2(f"[Memory Stored] Summary: {parsed['summary']}")
+            # 🧠 Only trigger summary for AskAI entries
+            if type_ == "askai":
+                try:
+                    if count_user_memories(user, type_="askai") >= 5:
+                        asyncio.create_task(summarize_and_replace_user_memories_async(user))
+                except Exception as e:
+                    log_error(f"[Async Memory Summary ERROR] {e}")
     except Exception as e:
         raw_output = response.choices[0].message.content.strip()
         log_error(f"[Merged Memory Error] {e} | Raw: {raw_output}")
