@@ -29,7 +29,7 @@ import json
 import random
 from utils.game_utils import estimate_team_gold,ensure_item_prices_loaded
 from memory_manager import (add_to_memory,query_memory_relevant,count_user_memories, summarize_and_replace_user_memories_async, get_current_game_id,
-                            query_memory_for_type)
+                            query_memory_for_type,add_game_memory)
 from game_data_monitor import set_callback, game_data_loop, generate_game_recap, get_previous_state, set_triggers, feats_trigger, streak_trigger
 from shared_state import previous_state,inhib_respawn_timer, baron_expire, elder_expire, player_ratings,seen_inhib_events,tracker  
 from prompts.user_prompts import get_random_commentary_prompt, get_random_recap_prompt
@@ -194,7 +194,7 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
         f"User asked:\n{prompt}\n\n"
         f"Respond in this JSON format:\n"
         "{\n"
-        '  "answer": "The response the AI should say out loud or show to the user.",\n'
+        '  "answer": "The response the AI should say out loud or show to the user. Keep under 250 characters.",\n'
         '  "store": true or false,  // true if the user provided a new, useful fact\n'
         '  "summary": "If storing, extract a concise, factual memory (e.g., a name, preference, stat, relationship). Do NOT summarize the question."\n'
         "}\n\n"
@@ -216,14 +216,23 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
         parsed = json.loads(response.choices[0].message.content)
         ai_text = parsed.get("answer", "").strip()
         if enable_memory and parsed.get("store") and parsed.get("summary"):
-            add_to_memory(
-                content=parsed["summary"],
-                type_=type_,
-                stream_date=tracker.get_stream_date(),
-                game_number=tracker.get_game_number(),
-                metadata={"user": user, "source": type_}
-            )
-            log_event2(f"[Memory Stored] Summary: {parsed['summary']}")
+            if type_ == "game" and user == "GameMonitor":
+                add_game_memory(
+                    content=parsed["summary"],
+                    stream_date=tracker.get_stream_date(),
+                    game_number=tracker.get_game_number(),
+                    metadata={"user": user, "source": type_}
+                )
+                log_event2(f"[Game Memory Stored] Summary: {parsed['summary']}")
+            else:
+                add_to_memory(
+                    content=parsed["summary"],
+                    type_=type_,
+                    stream_date=tracker.get_stream_date(),
+                    game_number=tracker.get_game_number(),
+                    metadata={"user": user, "source": type_}
+                )
+                log_event2(f"[Memory Stored] Summary: {parsed['summary']}")
             # 🧠 Only trigger summary for AskAI entries
             if type_ == "askai":
                 try:
@@ -524,7 +533,7 @@ def handle_game_data(data, your_player_data, current_data, merged_results):
         if not tts_busy and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
             combined_prompt = get_random_commentary_prompt(mode) +  "\n" + "\n".join(merged_results)
             log_merged_prompt(combined_prompt)
-            ai_text = get_ai_response(prompt=combined_prompt, mode=mode, user="GameMonitor", type_="Game")
+            ai_text = get_ai_response(prompt=combined_prompt, mode=mode, user="GameMonitor", type_="game")
             asyncio.create_task(safe_add_to_tts_queue(("game", "GameMonitor", ai_text)))
             last_game_tts_time = timestamp_now
         elif tts_busy:

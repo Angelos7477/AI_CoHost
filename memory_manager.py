@@ -9,6 +9,7 @@ import os
 from datetime import datetime, timezone
 import time
 import asyncio
+from shared_state import previous_state
 
 # Cooldown map to prevent redundant summaries
 _memory_summary_cooldowns = {}
@@ -74,6 +75,43 @@ def add_to_memory(content, type_, stream_date, game_number, metadata=None):
         full_metadata.update(metadata)
     collection.add(
         documents=[content],
+        metadatas=[full_metadata],
+        ids=[entry_id],
+        embeddings=[embedding]
+    )
+def add_game_memory(content, stream_date, game_number, metadata=None):
+    game_id = get_current_game_id(stream_date, game_number)
+    embedding = generate_embedding(content)
+    entry_id = str(uuid.uuid4())
+    # ⏱ Format game time
+    seconds = previous_state.get("last_game_time", 0)
+    minutes = int(seconds // 60)
+    sec = int(seconds % 60)
+    game_time = f"{minutes}:{sec:02d}"
+    # 🧠 Get team scores
+    team_scores = previous_state.get("team_scores", {})
+    order_score = team_scores.get("ORDER", "?")
+    chaos_score = team_scores.get("CHAOS", "?")
+    # 🔝 Optionally show top player per team
+    formatted_players = previous_state.get("formatted_players", [])
+    order_top = max((p for p in formatted_players if p["team"] == "ORDER"), key=lambda x: x["score"], default=None)
+    chaos_top = max((p for p in formatted_players if p["team"] == "CHAOS"), key=lambda x: x["score"], default=None)
+    top_str = ""
+    if order_top and chaos_top:
+        top_str = f" | ORDER top: {order_top['name']} ({order_top['score']}), CHAOS top: {chaos_top['name']} ({chaos_top['score']})"
+    # 📌 Final memory content
+    full_content = f"🕒 {game_time} | ORDER: {order_score}, CHAOS: {chaos_score}{top_str} | Event: {content}"
+    full_metadata = {
+        "type": "game",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "game_id": game_id,
+        "stream_date": stream_date,
+        "game_number": game_number,
+    }
+    if metadata:
+        full_metadata.update(metadata)
+    collection.add(
+        documents=[full_content],
         metadatas=[full_metadata],
         ids=[entry_id],
         embeddings=[embedding]
@@ -243,20 +281,16 @@ async def summarize_and_replace_user_memories_async(user, type_="askai"):
     _memory_summary_cooldowns[user] = now_ts
     await asyncio.to_thread(summarize_and_replace_user_memories, user, type_)
 
-
 def query_memory_for_game(prompt, game_id, top_k=5):
     try:
         # Step 1: Query only using game_id
         results = collection.query(
             query_texts=[prompt],
-            n_results=top_k ,  # Fetch extra to allow filtering
+            n_results=top_k *3,  # Fetch extra to allow filtering
             where={"game_id": game_id}
         )
         docs = results.get("documents", [[]])[0]
         metas = results.get("metadatas", [[]])[0]
-        # 🔍 Log the raw metadata for inspection
-        for meta in metas:
-            log_event(f"[DEBUG GameMeta] {meta}")
         # Step 2: Filter to allowed users
         allowed_users = {"GameMonitor", "RecapEngine"}
         filtered = [
@@ -264,6 +298,8 @@ def query_memory_for_game(prompt, game_id, top_k=5):
             for doc, meta in zip(docs, metas)
             if meta.get("user") in allowed_users and meta.get("game_id") == game_id
         ]
+        # Step 3: Sort by timestamp (newest first)
+        filtered.sort(key=lambda x: x[1].get("timestamp", ""), reverse=True)
         return filtered[:top_k]
     except Exception as e:
         log_error(f"[Game Memory Query ERROR] {e}")
