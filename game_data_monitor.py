@@ -240,6 +240,11 @@ async def monitor_game_data(callback):
             formatted_players = infer_missing_roles(formatted_players)
             order_score = sum(p["score"] for p in formatted_players if p["team"] == "ORDER")
             chaos_score = sum(p["score"] for p in formatted_players if p["team"] == "CHAOS")
+            previous_state["formatted_players"] = formatted_players
+            previous_state["team_scores"] = {
+                "ORDER": round(order_score, 1),
+                "CHAOS": round(chaos_score, 1)
+            }
             await push_power_scores({
                 "players": formatted_players,
                 "order_total": round(order_score, 1),
