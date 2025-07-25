@@ -184,6 +184,15 @@
       color: white;
       pointer-events: none;
     }
+    .game-info {
+      display: none; /* ✅ Start hidden */
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      font-size: 20px;
+      font-weight: bold;
+      color: white;
+    }
 
   </style>
 </head>
@@ -203,6 +212,7 @@
   </div>
   <div id="cooldown-overlay">⏳ Cooldown...</div>
   <div id="cost-overlay">💰 Cost: $0.00000</div>
+  <div id="game-number" class="game-info"> Game 0</div>
   <div id="mood-text"> Personality Name...</div>
 
   <script>
@@ -279,6 +289,14 @@
           const costDiv = document.getElementById("cost-overlay");
           costDiv.textContent = `💰 Total API Cost: $${parseFloat(data.amount).toFixed(4)}`;
           costDiv.style.display = "block";
+        } else if (data.type === "game_number") {
+          const gameDiv = document.getElementById("game-number");
+          if (data.number && data.number > 0) {
+            gameDiv.textContent = `Game ${data.number}`;
+            gameDiv.style.display = "block";
+          } else {
+            gameDiv.style.display = "none";  // Optional: hide if no games played yet
+          }
         } else if (data.type === "mood") {
           const mode = data.text.toLowerCase();
           const icon = iconMap[mode] || "icons/default.png";

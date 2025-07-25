@@ -20,3 +20,6 @@ logs/*
 # IDE files
 .vscode/
 .idea/
+
+# ChromaDB memory
+chromadb_memory/

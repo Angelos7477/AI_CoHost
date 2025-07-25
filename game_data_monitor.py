@@ -6,9 +6,11 @@ import time
 import json
 from utils.game_utils import estimate_team_gold,  power_score, infer_missing_roles
 from triggers.game_triggers import MultikillEventTrigger,FeatsOfStrengthTrigger, StreakTrigger
-from shared_state import previous_state, player_ratings, inhib_respawn_timer, baron_expire, elder_expire,seen_inhib_events
+from shared_state import previous_state, player_ratings, inhib_respawn_timer, baron_expire, elder_expire,seen_inhib_events,tracker
 import copy
-from overlay_push import push_power_scores
+from overlay_push import push_power_scores,push_game_number
+from game_tracker import GameTracker
+from memory_manager import add_to_memory
 
 
 POLL_INTERVAL = 5
@@ -222,7 +224,7 @@ async def monitor_game_data(callback):
                     "inhibitors_down": sum(1 for t in inhib_respawn_timer[player_team] if t > game_time_seconds)
                 }
                 lane_opponent = find_enemy_laner(player, all_players)  # You'll define this
-                score = power_score(player, enemy_laner=lane_opponent, team_data=player_team_data, game_time_minutes=game_time_minutes, verbose=True) * 40
+                score = power_score(player, enemy_laner=lane_opponent, team_data=player_team_data, game_time_minutes=game_time_minutes, verbose=True) * 5
                 player_ratings[player.get("summonerName", "UNKNOWN")] = score
             # ✅ Now after the loop: build formatted_players once
             formatted_players = [
@@ -238,6 +240,11 @@ async def monitor_game_data(callback):
             formatted_players = infer_missing_roles(formatted_players)
             order_score = sum(p["score"] for p in formatted_players if p["team"] == "ORDER")
             chaos_score = sum(p["score"] for p in formatted_players if p["team"] == "CHAOS")
+            previous_state["formatted_players"] = formatted_players
+            previous_state["team_scores"] = {
+                "ORDER": round(order_score, 1),
+                "CHAOS": round(chaos_score, 1)
+            }
             await push_power_scores({
                 "players": formatted_players,
                 "order_total": round(order_score, 1),
@@ -284,6 +291,21 @@ async def monitor_game_data(callback):
                         "inhib_respawn_timer": {k: list(v) for k, v in inhib_respawn_timer.items()},
                     }
                 })
+                # 🧠 Increment game number and log game start
+                tracker.increment_game_number()
+                game_id = tracker.get_game_id()
+                game_number = tracker.get_game_number()
+                stream_date = tracker.get_stream_date()
+                print(f"🆕 Game {game_number} started with ID {game_id}")
+                # 📡 Push game number to overlay
+                await push_game_number(game_number)
+                add_to_memory(
+                    content="A new League game has started.",
+                    type_="game_event",
+                    stream_date=stream_date,
+                    game_number=game_number,
+                    metadata={"event": "game_start"}
+                )
                 print("📡 Initialized game_data_loop with current stats.")
                 await asyncio.sleep(POLL_INTERVAL)
                 continue

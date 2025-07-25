@@ -48,6 +48,11 @@ def setup_shutdown_hooks(bot_instance=None, executor=None):
                 tts_monitor_task.cancel()
         except Exception as e:
             print(f"⚠️ Failed to cancel tts_monitor_task cleanly: {e}")
+        try:
+            from memory_manager import close_memory
+            close_memory()
+        except Exception as e:
+            print(f"⚠️ Error while closing memory: {e}")
                 
         list_all_threads()
         os._exit(0)

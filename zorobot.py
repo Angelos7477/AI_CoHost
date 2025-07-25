@@ -28,8 +28,10 @@ from elevenlabs import play, VoiceSettings
 import json
 import random
 from utils.game_utils import estimate_team_gold,ensure_item_prices_loaded
+from memory_manager import (add_to_memory,query_memory_relevant,count_user_memories, summarize_and_replace_user_memories_async, get_current_game_id,
+                            query_memory_for_type,add_game_memory)
 from game_data_monitor import set_callback, game_data_loop, generate_game_recap, get_previous_state, set_triggers, feats_trigger, streak_trigger
-from shared_state import previous_state,inhib_respawn_timer, baron_expire, elder_expire, player_ratings,seen_inhib_events
+from shared_state import previous_state,inhib_respawn_timer, baron_expire, elder_expire, player_ratings,seen_inhib_events,tracker  
 from prompts.user_prompts import get_random_commentary_prompt, get_random_recap_prompt
 
 # === Load Environment Variables ===
@@ -73,7 +75,7 @@ voted_users = set()  # Track users who already voted this round
 tts_lock = asyncio.Lock()
 tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 tts_queue = asyncio.Queue()
-ASKAI_COOLDOWN_SECONDS = 40
+ASKAI_COOLDOWN_SECONDS = 20
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
 VOTING_DURATION = 300
@@ -168,19 +170,83 @@ def load_system_prompt(mode):
     except FileNotFoundError:
         return "You are a witty League of Legends commentator."
     
-def get_ai_response(prompt, mode):
+def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
     system_prompt = load_system_prompt(mode)
+    # 🧠 Retrieve memory context
+    try:
+        if type_ in ["game", "recap"]:
+            game_id = get_current_game_id(tracker.get_stream_date(), tracker.get_game_number())
+            memory_chunks = query_memory_for_type(prompt, type_, user, game_id)
+        else:
+            memory_chunks = query_memory_for_type(prompt, type_, user)
+    except Exception as e:
+        log_error(f"[Memory Query ERROR] {e}")
+        memory_chunks = []
+    # 📦 Build memory context or fallback
+    if memory_chunks:
+        memory_text = "\n\n".join(f"🧠 {mem}" for mem, _ in memory_chunks)
+    else:
+        memory_text = "⚠️ No relevant memory context found."
+    if type_ in ["game", "recap"]:
+        enhanced_prompt = build_game_prompt(memory_text, prompt)
+    else:
+        enhanced_prompt = (
+            f"You have access to the following recent memories from the stream:\n"
+            f"{memory_text}\n\n"
+            f"Now answer the user's question **and decide whether any new information should be added to memory**.\n\n"
+            f"User asked:\n{prompt}\n\n"
+            f"Respond in this JSON format:\n"
+            "{\n"
+            '  "answer": "The response the AI should say out loud or show to the user. Keep under 250 characters.",\n'
+            '  "store": true or false,  // true if the user provided a new, useful fact\n'
+            '  "summary": "If storing, extract a concise, factual memory (e.g., a name, preference, stat, relationship). Do NOT summarize the question."\n'
+            "}\n\n"
+            "✅ Only extract and store *useful knowledge*, not a paraphrase of the question.\n"
+        )
     response = client.chat.completions.create(
-        model="gpt-4o",  #gpt-4o , gpt-3.5-turbo
+        model="chatgpt-4o-latest",  #gpt-4o , gpt-3.5-turbo , chatgpt-4o-latest
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
+            {"role": "user", "content": enhanced_prompt}
         ],
-        max_tokens=150,
+        response_format={"type": "json_object"},  # ✅ correct for openai>=1.x
+        max_tokens=200,
         temperature=0.7,
         frequency_penalty=0.3,
         presence_penalty=0.3
     )
+    try:
+        parsed = json.loads(response.choices[0].message.content)
+        ai_text = parsed.get("answer", "").strip()
+        if enable_memory and parsed.get("store") and parsed.get("summary"):
+            if type_ in ["game", "recap"] and user in ["GameMonitor", "RecapEngine"]:
+                add_game_memory(
+                    content=parsed["summary"],
+                    stream_date=tracker.get_stream_date(),
+                    game_number=tracker.get_game_number(),
+                    metadata={"user": user, "source": type_}
+                )
+                log_event2(f"[Game Memory Stored] Summary: {parsed['summary']}")
+            else:
+                add_to_memory(
+                    content=parsed["summary"],
+                    type_=type_,
+                    stream_date=tracker.get_stream_date(),
+                    game_number=tracker.get_game_number(),
+                    metadata={"user": user, "source": type_}
+                )
+                log_event2(f"[Memory Stored] Summary: {parsed['summary']}")
+            # 🧠 Only trigger summary for AskAI entries
+            if type_ == "askai":
+                try:
+                    if count_user_memories(user, type_="askai") >= 5:
+                        asyncio.create_task(summarize_and_replace_user_memories_async(user))
+                except Exception as e:
+                    log_error(f"[Async Memory Summary ERROR] {e}")
+    except Exception as e:
+        raw_output = response.choices[0].message.content.strip()
+        log_error(f"[Merged Memory Error] {e} | Raw: {raw_output}")
+        ai_text = raw_output  # fallback
     # Log token usage & estimate cost
     usage = response.usage
     total_tokens = usage.total_tokens
@@ -196,13 +262,54 @@ def get_ai_response(prompt, mode):
         asyncio.create_task(push_cost_increment(cost))  # We’ll define this
     except Exception as e:
         log_error(f"[Overlay Cost Push ERROR] {e}")
-    return response.choices[0].message.content
+        # 📝 Log full prompt and response
+    try:
+        full_ai_output_log = (
+            f"🔎 [AI RESPONSE LOG]\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{enhanced_prompt}\n\n"
+            f"AI Response:\n{response.choices[0].message.content}\n"
+        )
+        log_ai_response(full_ai_output_log)
+    except Exception as e:
+        log_error(f"[AI Log Error] {e}")
+    return ai_text
+    #return response.choices[0].message.content
+
+def build_game_prompt(memory_text: str, user_prompt: str) -> str:
+    # 🧠 Explain how to read the memory data
+    guide = (
+        "You are reading recent **game memories** from a League of Legends match.\n"
+        "Each memory line starts with the in-game time (🕒 MM:SS), followed by:\n"
+        "- Power scores for both teams (ORDER and CHAOS) — higher means stronger overall team power.\n"
+        "- All players on each team, shown by role and power score.\n"
+        "- An event description (kills, objectives, item purchases, etc.)\n\n"
+        "Use this data to understand the match flow, identify key moments, and react intelligently.\n"
+        "Avoid quoting exact numbers unless contextually meaningful — focus on momentum shifts, major plays, and team advantages.\n"
+        "Do not refer to teams as 'ORDER' or 'CHAOS' — instead, say 'your team' or 'the enemy team' depending on perspective.\n\n"
+    )
+    enhanced_prompt = (
+        f"{guide}"
+        f"You have access to the following recent game memories:\n"
+        f"{memory_text}\n\n"
+        f"Now answer the user's question **and decide whether any new information should be added to memory**.\n\n"
+        f"User asked:\n{user_prompt}\n\n"
+        f"Respond in this JSON format:\n"
+        "{\n"
+        '  "answer": "The response the AI should say out loud or show to the user. Keep under 250 characters.",\n'
+        '  "store": true or false,\n'
+        '  "summary": "If storing, extract a useful game fact (e.g., shift in power, major kill streak, objective taken, comeback sign, or turning point). Do NOT repeat or paraphrase the question."\n'
+        "}\n\n"
+        "✅ Store any game fact that could be relevant later for analysis or context. Prioritize turning points, clutch moments, and team-wide shifts.\n"
+    )
+    return enhanced_prompt
+
 
 def estimate_cost(model, prompt_tokens, completion_tokens):
     if model.startswith("gpt-3.5-turbo"):
-        return (prompt_tokens + completion_tokens) / 1000 * 0.001
-    elif model.startswith("gpt-4o"):
-        return (prompt_tokens + completion_tokens) / 1000 * 0.005
+        return (prompt_tokens / 1000 * 0.0015) + (completion_tokens / 1000 * 0.002)
+    elif model.startswith(("gpt-4o", "chatgpt-4o-latest")):
+        return (prompt_tokens / 1000 * 0.005) + (completion_tokens / 1000 * 0.015)
     elif model.startswith("gpt-4"):
         return (prompt_tokens / 1000 * 0.03) + (completion_tokens / 1000 * 0.06)
     return 0.0
@@ -216,7 +323,7 @@ def get_event_reaction(event_type, user):
         "gift": f"{user} gifted a sub! React like it’s a game-winning teamfight.",
         "giftmass": f"{user} just launched a gift sub train! React like the Nexus is exploding!",
     }.get(event_type, f"{user} triggered an unknown event. React accordingly.")
-    return get_ai_response(base_prompt, get_current_mode())
+    return get_ai_response(prompt=base_prompt, mode=get_current_mode(), user=user, type_="event", enable_memory=False)
 
 def speak_sync(text, voice_id=ELEVEN_VOICE_ID):
     if USE_ELEVENLABS:
@@ -243,6 +350,13 @@ async def speak_text(text):
     voice_id = VOICE_BY_MODE.get(mode, ELEVEN_VOICE_ID)
     await loop.run_in_executor(tts_executor, speak_sync, text, voice_id)
 
+def push_overlay_later(func, *args, delay=0.1):
+    async def _task():
+        if delay > 0:
+            await asyncio.sleep(delay)
+        await func(*args)
+    asyncio.create_task(_task())
+
 async def tts_worker():
     global tts_busy
     while True:
@@ -257,7 +371,7 @@ async def tts_worker():
                     chat_message = f"{user}, ZoroTheCaster says: {answer}"
                     if bot_instance:
                         async def delayed_chat():
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(0)
                             await bot_instance.send_to_chat(chat_message)
                         asyncio.create_task(delayed_chat())
                     # ✅ Delegate everything to the unified overlay method
@@ -269,10 +383,9 @@ async def tts_worker():
                             log_error(f"[OBS AskAI Update Error] {e}")
                     # ✅ Push to Overlay WebSocket!
                     try:
-                        await asyncio.sleep(1)
-                        await push_askai_overlay(question, answer)
+                        push_overlay_later(push_askai_overlay, question, answer, delay=0)
                     except Exception as e:
-                        log_error(f"[Overlay Push AskAI ERROR] {e}"),
+                        log_error(f"[Overlay Push AskAI ERROR] {e}")
                     await speak_text(answer)
                     # NEW: Send hide event to WebSocket
                     try:
@@ -284,7 +397,7 @@ async def tts_worker():
                     chat_message = f"{user}, ZoroTheCaster says: {text}"
                     if bot_instance:
                         async def delayed_chat():
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(0)
                             await bot_instance.send_to_chat(chat_message)
                         asyncio.create_task(delayed_chat())
                     if hasattr(bot_instance, "obs_controller"):
@@ -295,8 +408,7 @@ async def tts_worker():
                             log_error(f"[OBS Event Overlay Update Error] {e}")
                     # ✅ Push to Overlay WebSocket!
                     try:
-                        await asyncio.sleep(1)
-                        await push_event_overlay(text)
+                        push_overlay_later(push_event_overlay, text, delay=0)
                     except Exception as e:
                         log_error(f"[Overlay Push Event ERROR] {e}")
                     await speak_text(text)
@@ -309,12 +421,11 @@ async def tts_worker():
                     chat_message = f"{user}, ZoroTheCaster says: {text}"
                     if bot_instance:
                         async def delayed_chat():
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(0)
                             await bot_instance.send_to_chat(chat_message)
                         asyncio.create_task(delayed_chat())
                     try:
-                        await asyncio.sleep(1)
-                        await push_commentary_overlay(text)
+                        push_overlay_later(push_commentary_overlay, text, delay=0)
                     except Exception as e:
                         log_error(f"[Overlay Push Game ERROR] {e}")
                     await speak_text(text)
@@ -359,7 +470,7 @@ async def tts_monitor_loop():
             # 📄 For logs
             debug_prompt = f"{personality_prompt}\n{numbered_debug}"
             log_merged_prompt(debug_prompt)
-            ai_text = get_ai_response(combined_prompt, mode)
+            ai_text = get_ai_response(prompt=combined_prompt, mode=mode, user="GameMonitor", type_="game")
             await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
             buffered_game_events.clear()
 
@@ -393,6 +504,23 @@ def log_askai_commentary_prompt(text: str):
     path = _get_log_path("askai_commentary.log")
     with open(path, "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {text.strip()}\n")
+def log_askai_question(user: str, question: str, answer: str):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    path = _get_log_path("askai.log")
+    log_entry = f"[{timestamp}] {user}: Q: {question} | A: {answer.strip()}\n"
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(log_entry)
+def log_ai_response(text):
+    path = _get_log_path("askai_full.log")
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {text}\n\n")
+def log_event2(message: str):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    path = _get_log_path("events.log")
+    with open(path, "a", encoding="utf-8") as log_file:
+        log_file.write(f"[{timestamp}] {message}\n")
+
 
 def is_game_related(question: str):
     q = question.lower()
@@ -441,7 +569,7 @@ def handle_game_data(data, your_player_data, current_data, merged_results):
         if not tts_busy and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
             combined_prompt = get_random_commentary_prompt(mode) +  "\n" + "\n".join(merged_results)
             log_merged_prompt(combined_prompt)
-            ai_text = get_ai_response(combined_prompt, mode)
+            ai_text = get_ai_response(prompt=combined_prompt, mode=mode, user="GameMonitor", type_="game")
             asyncio.create_task(safe_add_to_tts_queue(("game", "GameMonitor", ai_text)))
             last_game_tts_time = timestamp_now
         elif tts_busy:
@@ -462,7 +590,7 @@ def handle_game_data(data, your_player_data, current_data, merged_results):
         if recap_text:
             recap_prompt = get_random_recap_prompt() + "\n" + recap_text
             log_recap_prompt(recap_prompt)  # 🧼 New log file!
-            ai_text = get_ai_response(recap_prompt, mode)
+            ai_text = get_ai_response(prompt=recap_prompt, mode=mode, user="RecapEngine", type_="recap", enable_memory=True)
             asyncio.create_task(safe_add_to_tts_queue(("game", "GameRecap", ai_text)))
             previous_state["last_recap_time"] = timestamp_now
             previous_state["last_recap_snapshot"] = {
@@ -484,7 +612,7 @@ async def start_commentator_mode(interval_sec=60):
             previous_mode = mode
         prompt = "Comment on the current state of the game with your personality."
         try:
-            ai_text = get_ai_response(prompt, mode)
+            ai_text = get_ai_response(prompt, mode, user="Commentator", type_="commentate")
             print(f"[ZoroTheCaster - {mode.upper()}]:", ai_text)
             await safe_add_to_tts_queue(ai_text)
         except Exception as e:
@@ -890,10 +1018,6 @@ class ZoroTheCasterBot(commands.Bot):
         if askai_queue.qsize() >= ASKAI_TTS_RESERVED_LIMIT:
             await ctx.send("🚫 AskAI is currently overloaded with responses. Please try again soon.")
             return
-        # Log question to file
-        timestamp = datetime.now(timezone.utc).isoformat()
-        with open("logs/askai_log.txt", "a", encoding="utf-8") as log_file:
-            log_file.write(f"[{timestamp}] {user}: {question}\n")
         if "commentate" in question.lower() or "comentate" in question.lower() or "commentary" in question.lower():
             current_state = get_previous_state()
             full_prompt = f"Commentate on the current game:\n{self.build_game_context(current_state)}\n\n🧠 {user} asked: {question}"
@@ -901,21 +1025,33 @@ class ZoroTheCasterBot(commands.Bot):
             log_askai_commentary_prompt(full_prompt)
         else:
             full_prompt = f"{user} asked: {question}"
-        await askai_queue.put((user, full_prompt))
+        await askai_queue.put((user, question, full_prompt))
         # ✅ Set cooldown timestamp for this user
         askai_cooldowns[user] = now
         await ctx.send(f"🧠 {user}, your question is queued at position #{askai_queue.qsize()}")
 
     async def process_askai_queue(self):
         while True:
-            user, question = await askai_queue.get()
+            user, raw_question, question = await askai_queue.get()
             mode = get_current_mode()
             try:
-                ai_text = get_ai_response(question, mode)
+                ai_text = get_ai_response(prompt=question, mode=mode, user=user,type_="askai")
+                # ✅ Memory filtering: let AI decide if it should be stored
+#                if should_store_memory(raw_question):  # <-- Use raw user input only
+#                    summary = summarize_interaction(raw_question)  # No AI answer included
+#                    add_to_memory(
+#                        content=summary,
+#                        type_="askai",
+#                        stream_date=tracker.get_stream_date(),
+#                        game_number=tracker.get_game_number(),
+#                        metadata={
+#                            "user": user,
+#                            "source": "askai"
+#                        }
+#                    )
                 print(f"[ZoroTheCaster AI Answer - {mode.upper()}]:", ai_text)
-                # Send (user, ai_text) tuple to tts_queue instead of plain text
                 await safe_add_to_tts_queue(("askai", user, question, ai_text))
-            # ✅ Write to askai_data.txt for HTML/CSS Overlay (OBS Browser Source)
+                log_askai_question(user, raw_question, ai_text)
             except Exception as e:
                 error_msg = f"Error in askai processing for {user}: {e}"
                 print(f"❌ {error_msg}")
@@ -923,6 +1059,7 @@ class ZoroTheCasterBot(commands.Bot):
                 await self.send_to_chat(f"❌ {user}, something went wrong with the AI response.")
             askai_queue.task_done()
             await asyncio.sleep(ASKAI_QUEUE_DELAY)
+
 
     async def send_to_chat(self, message):
         try:

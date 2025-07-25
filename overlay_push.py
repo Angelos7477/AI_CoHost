@@ -93,3 +93,9 @@ async def push_cost_increment(cost):
     global session_cost_total
     session_cost_total += cost
     await push_cost_overlay(session_cost_total)
+
+async def push_game_number(game_number):
+    await broadcast({
+        "type": "game_number",
+        "number": game_number
+    })
