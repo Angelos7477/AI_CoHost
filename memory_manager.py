@@ -10,8 +10,11 @@ from datetime import datetime, timezone, timedelta
 import time
 import asyncio
 from shared_state import previous_state
+import json
+from dotenv import load_dotenv
 
 # Cooldown map to prevent redundant summaries
+load_dotenv()
 _memory_summary_cooldowns = {}
 SUMMARY_COOLDOWN_SECONDS = 300  # 5 minutes
 
@@ -95,26 +98,32 @@ def add_game_memory(content, stream_date, game_number, metadata=None):
     enemy_team = "CHAOS" if your_team == "ORDER" else "ORDER"
     order_score = team_scores.get("ORDER", "?")
     chaos_score = team_scores.get("CHAOS", "?")
-    # 🔝 Optionally show top player per team
     formatted_players = previous_state.get("formatted_players", [])
-    def top_players_by_role(team_name):
-        role_order = ["top", "jungle", "mid", "adc", "support"]
+    def full_team_summary(team_name):
+        role_order = ["top", "jungle", "middle", "bottom", "utility"]
+        pretty_roles = {
+            "top": "Top",
+            "jungle": "Jungle",
+            "middle": "Mid",
+            "bottom": "ADC",
+            "utility": "Support"
+        }
         players = [p for p in formatted_players if p["team"] == team_name]
-        # Pick highest-score player per role
-        role_map = {}
-        for role in role_order:
-            candidates = [p for p in players if p["role"] == role]
-            if candidates:
-                top_player = max(candidates, key=lambda p: p["score"])
-                role_map[role] = top_player
-        return [f"{role.capitalize()}: {p['name']} ({p['score']})" for role, p in role_map.items()]
-    order_summary = ", ".join(top_players_by_role("ORDER"))
-    chaos_summary = ", ".join(top_players_by_role("CHAOS"))
-    top_str = f" | ORDER: {order_summary} | CHAOS: {chaos_summary}"
+        player_map = {p["role"]: p for p in players}
+        return [
+            f"{pretty_roles[role]}: {player_map[role]['name']} ({player_map[role]['score']})"
+            for role in role_order if role in player_map
+        ]
+    order_summary = ", ".join(full_team_summary("ORDER"))
+    chaos_summary = ", ".join(full_team_summary("CHAOS"))
+    top_str = (
+        f"\nORDER: {order_summary}"
+        f"\nCHAOS: {chaos_summary}"
+    )
     # 👤 Add your summoner name if available
     your_name = previous_state.get("your_name")
     if your_name:
-        top_str += f" | You are playing as: {your_name}"
+        top_str += f"\nYou are playing as: {your_name}"
     # 📌 Final memory content
     full_content = (
         f"🕒 {game_time} | Your Team ({your_team}): {team_scores.get(your_team, '?')}, "
@@ -158,8 +167,10 @@ def query_memory_relevant(prompt, user=None, top_k_user=4, top_k_global=2):
         # 🧠 2. Global results (skip duplicates)
         global_results = collection.query(
             query_texts=[prompt],
-            n_results=top_k_global + 2,  # overfetch in case of duplicates
-            where=None
+            n_results=top_k_global + 3,  # overfetch in case of duplicates
+            where={
+                "type": {"$nin": ["game", "recap", "game_event"]}
+            }
         )
         global_docs = global_results.get("documents", [[]])[0]
         global_metas = global_results.get("metadatas", [[]])[0]
@@ -332,7 +343,7 @@ def query_memory_for_type(prompt, type_, user, game_id=None):
         return query_memory_for_game(prompt, game_id)
     return query_memory_for_askai(prompt, user)
 
-def delete_old_game_memories(days_old=1, types_to_delete=("game", "game_event", "recap","Game")):
+def delete_old_game_memories(days_old=0, types_to_delete=("game", "game_event", "recap","Game")):
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_old)
     results = collection.get(include=["metadatas"])
     to_delete = []

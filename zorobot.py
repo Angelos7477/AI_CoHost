@@ -187,7 +187,7 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
         memory_text = "\n\n".join(f"🧠 {mem}" for mem, _ in memory_chunks)
     else:
         memory_text = "⚠️ No relevant memory context found."
-    if type_ in ["game", "recap"] and memory_chunks:
+    if type_ in ["game", "recap"]:
         enhanced_prompt = build_game_prompt(memory_text, prompt)
     else:
         enhanced_prompt = (
@@ -204,7 +204,7 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
             "✅ Only extract and store *useful knowledge*, not a paraphrase of the question.\n"
         )
     response = client.chat.completions.create(
-        model="gpt-4o",  #gpt-4o , gpt-3.5-turbo
+        model="chatgpt-4o-latest",  #gpt-4o , gpt-3.5-turbo , chatgpt-4o-latest
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": enhanced_prompt}
@@ -307,9 +307,9 @@ def build_game_prompt(memory_text: str, user_prompt: str) -> str:
 
 def estimate_cost(model, prompt_tokens, completion_tokens):
     if model.startswith("gpt-3.5-turbo"):
-        return (prompt_tokens + completion_tokens) / 1000 * 0.001
-    elif model.startswith("gpt-4o"):
-        return (prompt_tokens + completion_tokens) / 1000 * 0.005
+        return (prompt_tokens / 1000 * 0.0015) + (completion_tokens / 1000 * 0.002)
+    elif model.startswith(("gpt-4o", "chatgpt-4o-latest")):
+        return (prompt_tokens / 1000 * 0.005) + (completion_tokens / 1000 * 0.015)
     elif model.startswith("gpt-4"):
         return (prompt_tokens / 1000 * 0.03) + (completion_tokens / 1000 * 0.06)
     return 0.0
