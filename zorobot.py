@@ -187,19 +187,22 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
         memory_text = "\n\n".join(f"🧠 {mem}" for mem, _ in memory_chunks)
     else:
         memory_text = "⚠️ No relevant memory context found."
-    enhanced_prompt = (
-        f"You have access to the following recent memories from the stream:\n"
-        f"{memory_text}\n\n"
-        f"Now answer the user's question **and decide whether any new information should be added to memory**.\n\n"
-        f"User asked:\n{prompt}\n\n"
-        f"Respond in this JSON format:\n"
-        "{\n"
-        '  "answer": "The response the AI should say out loud or show to the user. Keep under 250 characters.",\n'
-        '  "store": true or false,  // true if the user provided a new, useful fact\n'
-        '  "summary": "If storing, extract a concise, factual memory (e.g., a name, preference, stat, relationship). Do NOT summarize the question."\n'
-        "}\n\n"
-        "✅ Only extract and store *useful knowledge*, not a paraphrase of the question.\n"
-    )
+    if type_ in ["game", "recap"] and memory_chunks:
+        enhanced_prompt = build_game_prompt(memory_text, prompt)
+    else:
+        enhanced_prompt = (
+            f"You have access to the following recent memories from the stream:\n"
+            f"{memory_text}\n\n"
+            f"Now answer the user's question **and decide whether any new information should be added to memory**.\n\n"
+            f"User asked:\n{prompt}\n\n"
+            f"Respond in this JSON format:\n"
+            "{\n"
+            '  "answer": "The response the AI should say out loud or show to the user. Keep under 250 characters.",\n'
+            '  "store": true or false,  // true if the user provided a new, useful fact\n'
+            '  "summary": "If storing, extract a concise, factual memory (e.g., a name, preference, stat, relationship). Do NOT summarize the question."\n'
+            "}\n\n"
+            "✅ Only extract and store *useful knowledge*, not a paraphrase of the question.\n"
+        )
     response = client.chat.completions.create(
         model="gpt-4o",  #gpt-4o , gpt-3.5-turbo
         messages=[
@@ -216,7 +219,7 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
         parsed = json.loads(response.choices[0].message.content)
         ai_text = parsed.get("answer", "").strip()
         if enable_memory and parsed.get("store") and parsed.get("summary"):
-            if type_ == "game" and user == "GameMonitor":
+            if type_ in ["game", "recap"] and user in ["GameMonitor", "RecapEngine"]:
                 add_game_memory(
                     content=parsed["summary"],
                     stream_date=tracker.get_stream_date(),
@@ -273,6 +276,35 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
     return ai_text
     #return response.choices[0].message.content
 
+def build_game_prompt(memory_text: str, user_prompt: str) -> str:
+    # 🧠 Explain how to read the memory data
+    guide = (
+        "You are reading recent **game memories** from a League of Legends match.\n"
+        "Each memory line starts with the in-game time (🕒 MM:SS), followed by:\n"
+        "- Power scores for both teams (ORDER and CHAOS) — higher means stronger overall team power.\n"
+        "- All players on each team, shown by role and power score.\n"
+        "- An event description (kills, objectives, item purchases, etc.)\n\n"
+        "Use this data to understand the match flow, identify key moments, and react intelligently.\n"
+        "Avoid quoting exact numbers unless contextually meaningful — focus on momentum shifts, major plays, and team advantages.\n"
+        "Do not refer to teams as 'ORDER' or 'CHAOS' — instead, say 'your team' or 'the enemy team' depending on perspective.\n\n"
+    )
+    enhanced_prompt = (
+        f"{guide}"
+        f"You have access to the following recent game memories:\n"
+        f"{memory_text}\n\n"
+        f"Now answer the user's question **and decide whether any new information should be added to memory**.\n\n"
+        f"User asked:\n{user_prompt}\n\n"
+        f"Respond in this JSON format:\n"
+        "{\n"
+        '  "answer": "The response the AI should say out loud or show to the user. Keep under 250 characters.",\n'
+        '  "store": true or false,\n'
+        '  "summary": "If storing, extract a useful game fact (e.g., shift in power, major kill streak, objective taken, comeback sign, or turning point). Do NOT repeat or paraphrase the question."\n'
+        "}\n\n"
+        "✅ Store any game fact that could be relevant later for analysis or context. Prioritize turning points, clutch moments, and team-wide shifts.\n"
+    )
+    return enhanced_prompt
+
+
 def estimate_cost(model, prompt_tokens, completion_tokens):
     if model.startswith("gpt-3.5-turbo"):
         return (prompt_tokens + completion_tokens) / 1000 * 0.001
@@ -318,6 +350,13 @@ async def speak_text(text):
     voice_id = VOICE_BY_MODE.get(mode, ELEVEN_VOICE_ID)
     await loop.run_in_executor(tts_executor, speak_sync, text, voice_id)
 
+def push_overlay_later(func, *args, delay=0.1):
+    async def _task():
+        if delay > 0:
+            await asyncio.sleep(delay)
+        await func(*args)
+    asyncio.create_task(_task())
+
 async def tts_worker():
     global tts_busy
     while True:
@@ -332,7 +371,7 @@ async def tts_worker():
                     chat_message = f"{user}, ZoroTheCaster says: {answer}"
                     if bot_instance:
                         async def delayed_chat():
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(0)
                             await bot_instance.send_to_chat(chat_message)
                         asyncio.create_task(delayed_chat())
                     # ✅ Delegate everything to the unified overlay method
@@ -344,10 +383,9 @@ async def tts_worker():
                             log_error(f"[OBS AskAI Update Error] {e}")
                     # ✅ Push to Overlay WebSocket!
                     try:
-                        await asyncio.sleep(1)
-                        await push_askai_overlay(question, answer)
+                        push_overlay_later(push_askai_overlay, question, answer, delay=0)
                     except Exception as e:
-                        log_error(f"[Overlay Push AskAI ERROR] {e}"),
+                        log_error(f"[Overlay Push AskAI ERROR] {e}")
                     await speak_text(answer)
                     # NEW: Send hide event to WebSocket
                     try:
@@ -359,7 +397,7 @@ async def tts_worker():
                     chat_message = f"{user}, ZoroTheCaster says: {text}"
                     if bot_instance:
                         async def delayed_chat():
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(0)
                             await bot_instance.send_to_chat(chat_message)
                         asyncio.create_task(delayed_chat())
                     if hasattr(bot_instance, "obs_controller"):
@@ -370,8 +408,7 @@ async def tts_worker():
                             log_error(f"[OBS Event Overlay Update Error] {e}")
                     # ✅ Push to Overlay WebSocket!
                     try:
-                        await asyncio.sleep(1)
-                        await push_event_overlay(text)
+                        push_overlay_later(push_event_overlay, text, delay=0)
                     except Exception as e:
                         log_error(f"[Overlay Push Event ERROR] {e}")
                     await speak_text(text)
@@ -384,12 +421,11 @@ async def tts_worker():
                     chat_message = f"{user}, ZoroTheCaster says: {text}"
                     if bot_instance:
                         async def delayed_chat():
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(0)
                             await bot_instance.send_to_chat(chat_message)
                         asyncio.create_task(delayed_chat())
                     try:
-                        await asyncio.sleep(1)
-                        await push_commentary_overlay(text)
+                        push_overlay_later(push_commentary_overlay, text, delay=0)
                     except Exception as e:
                         log_error(f"[Overlay Push Game ERROR] {e}")
                     await speak_text(text)

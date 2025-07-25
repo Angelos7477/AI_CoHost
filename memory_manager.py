@@ -6,7 +6,7 @@ from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 from openai import OpenAI
 import uuid
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import time
 import asyncio
 from shared_state import previous_state
@@ -79,6 +79,7 @@ def add_to_memory(content, type_, stream_date, game_number, metadata=None):
         ids=[entry_id],
         embeddings=[embedding]
     )
+
 def add_game_memory(content, stream_date, game_number, metadata=None):
     game_id = get_current_game_id(stream_date, game_number)
     embedding = generate_embedding(content)
@@ -90,17 +91,35 @@ def add_game_memory(content, stream_date, game_number, metadata=None):
     game_time = f"{minutes}:{sec:02d}"
     # 🧠 Get team scores
     team_scores = previous_state.get("team_scores", {})
+    your_team = previous_state.get("your_team", "ORDER")
+    enemy_team = "CHAOS" if your_team == "ORDER" else "ORDER"
     order_score = team_scores.get("ORDER", "?")
     chaos_score = team_scores.get("CHAOS", "?")
     # 🔝 Optionally show top player per team
     formatted_players = previous_state.get("formatted_players", [])
-    order_top = max((p for p in formatted_players if p["team"] == "ORDER"), key=lambda x: x["score"], default=None)
-    chaos_top = max((p for p in formatted_players if p["team"] == "CHAOS"), key=lambda x: x["score"], default=None)
-    top_str = ""
-    if order_top and chaos_top:
-        top_str = f" | ORDER top: {order_top['name']} ({order_top['score']}), CHAOS top: {chaos_top['name']} ({chaos_top['score']})"
+    def top_players_by_role(team_name):
+        role_order = ["top", "jungle", "mid", "adc", "support"]
+        players = [p for p in formatted_players if p["team"] == team_name]
+        # Pick highest-score player per role
+        role_map = {}
+        for role in role_order:
+            candidates = [p for p in players if p["role"] == role]
+            if candidates:
+                top_player = max(candidates, key=lambda p: p["score"])
+                role_map[role] = top_player
+        return [f"{role.capitalize()}: {p['name']} ({p['score']})" for role, p in role_map.items()]
+    order_summary = ", ".join(top_players_by_role("ORDER"))
+    chaos_summary = ", ".join(top_players_by_role("CHAOS"))
+    top_str = f" | ORDER: {order_summary} | CHAOS: {chaos_summary}"
+    # 👤 Add your summoner name if available
+    your_name = previous_state.get("your_name")
+    if your_name:
+        top_str += f" | You are playing as: {your_name}"
     # 📌 Final memory content
-    full_content = f"🕒 {game_time} | ORDER: {order_score}, CHAOS: {chaos_score}{top_str} | Event: {content}"
+    full_content = (
+        f"🕒 {game_time} | Your Team ({your_team}): {team_scores.get(your_team, '?')}, "
+        f"Enemy Team ({enemy_team}): {team_scores.get(enemy_team, '?')}{top_str} | Event: {content}"
+    )
     full_metadata = {
         "type": "game",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -312,3 +331,23 @@ def query_memory_for_type(prompt, type_, user, game_id=None):
     if type_ in ["game", "recap"]:
         return query_memory_for_game(prompt, game_id)
     return query_memory_for_askai(prompt, user)
+
+def delete_old_game_memories(days_old=1, types_to_delete=("game", "game_event", "recap","Game")):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_old)
+    results = collection.get(include=["metadatas"])
+    to_delete = []
+    for doc_id, meta in zip(results["ids"], results["metadatas"]):
+        memory_type = meta.get("type")
+        timestamp_str = meta.get("timestamp")
+        if memory_type in types_to_delete and timestamp_str:
+            try:
+                entry_time = datetime.fromisoformat(timestamp_str)
+                if entry_time < cutoff:
+                    to_delete.append(doc_id)
+            except Exception as e:
+                log_error(f"[Memory Cleanup] Failed to parse timestamp: {e}")
+    if to_delete:
+        collection.delete(ids=to_delete)
+        log_event(f"🧹 Deleted {len(to_delete)} old memory entries: {types_to_delete}")
+    else:
+        log_event("🧹 No old memories found for deletion.")

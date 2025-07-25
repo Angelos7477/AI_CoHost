@@ -1,4 +1,4 @@
-# memory_debug.py
+#python memory_debug.py
 from memory_manager import collection
 
 print("🔍 Memory count:", collection.count())
