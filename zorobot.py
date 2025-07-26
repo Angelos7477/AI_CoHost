@@ -204,7 +204,7 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
             "✅ Only extract and store *useful knowledge*, not a paraphrase of the question.\n"
         )
     response = client.chat.completions.create(
-        model="chatgpt-4o-latest",  #gpt-4o , gpt-3.5-turbo , chatgpt-4o-latest
+        model="gpt-4.1-2025-04-14",  #gpt-4o , gpt-3.5-turbo , chatgpt-4o-latest , gpt-4o-2024-05-13 , gpt-4o-2024-11-20 , gpt-4.1-2025-04-14
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": enhanced_prompt}
@@ -310,6 +310,8 @@ def estimate_cost(model, prompt_tokens, completion_tokens):
         return (prompt_tokens / 1000 * 0.0015) + (completion_tokens / 1000 * 0.002)
     elif model.startswith(("gpt-4o", "chatgpt-4o-latest")):
         return (prompt_tokens / 1000 * 0.005) + (completion_tokens / 1000 * 0.015)
+    elif model.startswith(("gpt-4.1")):
+        return (prompt_tokens / 1000 * 0.002) + (completion_tokens / 1000 * 0.008)
     elif model.startswith("gpt-4"):
         return (prompt_tokens / 1000 * 0.03) + (completion_tokens / 1000 * 0.06)
     return 0.0

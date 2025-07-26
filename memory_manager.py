@@ -282,7 +282,7 @@ def summarize_and_replace_user_memories(user, type_="askai"):
             "Return a concise bullet-point list of facts (e.g., name, partner, TTS mode, preferences)."
         )
         result = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4.1-mini-2025-04-14",   # gpt-4o-mini-2024-07-18 , gpt-3.5-turbo , gpt-4.1-mini-2025-04-14
             messages=[{"role": "user", "content": summarization_prompt}],
             max_tokens=200,
             temperature=0.3
