@@ -52,7 +52,7 @@ RIOT_API_KEY = os.getenv("RIOT_API_KEY")
 USE_ELEVENLABS = os.getenv("USE_ELEVENLABS", "true").lower() == "true"
 
 # === Global Configs ===
-VALID_MODES = ["hype", "rage", "sarcastic", "wholesome","troll","smartass","tsundere","edgelord","shakespeare","genz"]
+VALID_MODES = ["hype", "rage", "sarcastic", "wholesome","troll","smartass","tsundere","edgelord","cospiracist","genz"]
 # 🧠 Choose model and voice ID
 ELEVEN_MODEL = "eleven_turbo_v2_5"
 ELEVEN_VOICE_ID = "TxGEqnHWrfWFTfGW9XjX"  # ← keep only as default/fallback
@@ -60,7 +60,7 @@ ELEVEN_VOICE_ID = "TxGEqnHWrfWFTfGW9XjX"  # ← keep only as default/fallback
 VOICE_BY_MODE = {
     "hype": "TxGEqnHWrfWFTfGW9XjX",       # Josh
     "smartass": "TxGEqnHWrfWFTfGW9XjX",   # Josh
-    "shakespeare": "TxGEqnHWrfWFTfGW9XjX",# Josh
+    "cospiracist": "TxGEqnHWrfWFTfGW9XjX",# Josh
     "rage": "21m00Tcm4TlvDq8ikWAM",      # Rachel
     "wholesome": "21m00Tcm4TlvDq8ikWAM",  # Rachel
     "tsundere": "21m00Tcm4TlvDq8ikWAM",   # Rachel
