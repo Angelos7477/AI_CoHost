@@ -74,7 +74,7 @@ vote_counts = defaultdict(int)
 voted_users = set()  # Track users who already voted this round
 tts_lock = asyncio.Lock()
 tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-tts_queue = asyncio.Queue()
+tts_queue = asyncio.PriorityQueue()  # ✅ This enables priority-based ordering
 ASKAI_COOLDOWN_SECONDS = 20
 ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
@@ -90,7 +90,7 @@ power_score_visible = True  # default state
 # Global reference to bot instance (initialized later)
 bot_instance = None
 os.makedirs("logs", exist_ok=True)
-MAX_TTS_QUEUE_SIZE = 10  # Prevents spam/flood
+MAX_TTS_QUEUE_SIZE = 12  # Prevents spam/flood
 ASKAI_TTS_RESERVED_LIMIT = 7  # Maximum messages askai is allowed to use in TTS queue
 EVENTSUB_RESERVED_SLOTS = MAX_TTS_QUEUE_SIZE - ASKAI_TTS_RESERVED_LIMIT
 overlay_ws_task = None
@@ -298,12 +298,37 @@ def build_game_prompt(memory_text: str, user_prompt: str) -> str:
         "{\n"
         '  "answer": "The response the AI should say out loud or show to the user. Keep under 250 characters.",\n'
         '  "store": true or false,\n'
-        '  "summary": "If storing, extract a useful game fact (e.g., shift in power, major kill streak, objective taken, comeback sign, or turning point). Do NOT repeat or paraphrase the question."\n'
+        '  "summary": "If storing, extract a useful game fact (e.g., shift in power, major kill streak, objective taken, comeback sign, or turning point). '
+        '   Do NOT repeat or paraphrase the question, unless it\'s a game over result."\n'
         "}\n\n"
         "✅ Store any game fact that could be relevant later for analysis or context. Prioritize turning points, clutch moments, and team-wide shifts.\n"
     )
     return enhanced_prompt
 
+def classify_prompt_type(prompt):
+    response = client.chat.completions.create(
+        model="gpt-4.1-mini-2025-04-14",  # Cheaper model for classification
+        messages=[
+            {"role": "system", "content": (
+                "You are a simple classifier. Decide whether the user's message "
+                "is about the current League of Legends game or not. "
+                "Respond only with 'game' if the user is asking something about the current League of Legends match, strategy, gameplay, or events. "
+                "If it’s a general question, lore, or not related to gameplay, respond 'askai'."
+            )},
+            {"role": "user", "content": prompt}
+        ],
+        max_tokens=5,
+        temperature=0.0
+    )
+    try:
+        content = response.choices[0].message.content.strip().lower()
+        if content.startswith("game"):
+            return "game"
+        else:
+            return "askai"
+    except Exception as e:
+        log_error(f"[Prompt Type Classifier ERROR] {e}")
+        return "askai"
 
 def estimate_cost(model, prompt_tokens, completion_tokens):
     if model.startswith("gpt-3.5-turbo"):
@@ -362,7 +387,7 @@ def push_overlay_later(func, *args, delay=0.1):
 async def tts_worker():
     global tts_busy
     while True:
-        item = await tts_queue.get()
+        _, item = await tts_queue.get()
         try:
             tts_busy = True
             log_merged_prompt("🟠 TTS state changed: BUSY")
@@ -448,14 +473,20 @@ async def tts_worker():
 
 async def safe_add_to_tts_queue(item):
     queue_size = tts_queue.qsize()
-    is_askai = isinstance(item, tuple) and item[0] == "askai"
-    if is_askai and queue_size >= ASKAI_TTS_RESERVED_LIMIT:
-        log_error(f"[ASKAI TTS SKIPPED] AskAI message dropped due to reserved space for EventSub.")
+    item_type = item[0] if isinstance(item, tuple) else "unknown"
+    if item_type == "game" or item_type == "event":
+        priority = 0
+    elif item_type == "askai":
+        priority = 1
+    else:
+        priority = 2
+    if queue_size >= ASKAI_TTS_RESERVED_LIMIT and priority > 0:
+        log_error(f"[ASKAI TTS DROPPED] {item_type.upper()} message dropped. Queue full.")
         return
-    if not is_askai and queue_size >= MAX_TTS_QUEUE_SIZE:
-        log_error(f"[EVENTSUB TTS SKIPPED] Queue full. EventSub message skipped: {item}")
+    if queue_size >= MAX_TTS_QUEUE_SIZE and priority==0:
+        log_error(f"[EVENTSUB TTS SKIPPED] {item_type.upper()} message dropped. Queue full. EventSub message skipped: {item}")
         return
-    await tts_queue.put(item)
+    await tts_queue.put((priority, item))
 
 async def tts_monitor_loop():
     global tts_busy
@@ -1020,11 +1051,11 @@ class ZoroTheCasterBot(commands.Bot):
         if askai_queue.qsize() >= ASKAI_TTS_RESERVED_LIMIT:
             await ctx.send("🚫 AskAI is currently overloaded with responses. Please try again soon.")
             return
-        if "commentate" in question.lower() or "comentate" in question.lower() or "commentary" in question.lower():
-            current_state = get_previous_state()
-            full_prompt = f"Commentate on the current game:\n{self.build_game_context(current_state)}\n\n🧠 {user} asked: {question}"
-            print("[ASKAI] current_state snapshot:", json.dumps(current_state, indent=2))
-            log_askai_commentary_prompt(full_prompt)
+        #if "commentate" in question.lower() or "comentate" in question.lower() or "commentary" in question.lower():
+        #    current_state = get_previous_state()
+        #    full_prompt = f"Commentate on the current game:\n{self.build_game_context(current_state)}\n\n🧠 {user} asked: {question}"
+        #    print("[ASKAI] current_state snapshot:", json.dumps(current_state, indent=2))
+        #    log_askai_commentary_prompt(full_prompt)
         else:
             full_prompt = f"{user} asked: {question}"
         await askai_queue.put((user, question, full_prompt))
@@ -1037,21 +1068,10 @@ class ZoroTheCasterBot(commands.Bot):
             user, raw_question, question = await askai_queue.get()
             mode = get_current_mode()
             try:
-                ai_text = get_ai_response(prompt=question, mode=mode, user=user,type_="askai")
-                # ✅ Memory filtering: let AI decide if it should be stored
-#                if should_store_memory(raw_question):  # <-- Use raw user input only
-#                    summary = summarize_interaction(raw_question)  # No AI answer included
-#                    add_to_memory(
-#                        content=summary,
-#                        type_="askai",
-#                        stream_date=tracker.get_stream_date(),
-#                        game_number=tracker.get_game_number(),
-#                        metadata={
-#                            "user": user,
-#                            "source": "askai"
-#                        }
-#                    )
-                print(f"[ZoroTheCaster AI Answer - {mode.upper()}]:", ai_text)
+                # 🧠 Classify if it's game-related
+                detected_type = classify_prompt_type(question)
+                ai_text = get_ai_response(prompt=question, mode=mode, user=user,type_=detected_type)
+                print(f"[ZoroTheCaster AI Answer - {mode.upper()} / {detected_type}]:", ai_text)
                 await safe_add_to_tts_queue(("askai", user, question, ai_text))
                 log_askai_question(user, raw_question, ai_text)
             except Exception as e:
