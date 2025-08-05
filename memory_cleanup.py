@@ -1,4 +1,4 @@
-#python memory_cleanup.py
+# python memory_cleanup.py
 
 from memory_manager import delete_old_game_memories
 

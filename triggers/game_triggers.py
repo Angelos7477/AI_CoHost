@@ -74,14 +74,15 @@ class KillCountTrigger(GameTrigger):
         self.triggered_milestones.clear()
     def check(self, current_data, previous_data):
         kills = current_data.get("kills", 0)
+        your_name = current_data.get("your_name", "")
         messages = []
         # Basic kill delta
         if kills > self.last_kills:
             diff = kills - self.last_kills
             kill_lines = [
-                f"💀 Picked up {diff} kill{'s' if diff > 1 else ''}! Keep the pressure on!",
-                f"🧨 Boom! {diff} more on the scoreboard.",
-                f"⚔️ Racking up kills — {diff} just now!"
+                f"⚔️ {your_name} just secured {diff} kill{'s' if diff > 1 else ''}! Keep snowballing!",
+                f"💀 {your_name} added {diff} more to the tally.",
+                f"🔥 {your_name} is racking up kills — {diff} just now!"
             ]
             messages.append(random.choice(kill_lines))
             self.last_kills = kills
@@ -91,21 +92,18 @@ class KillCountTrigger(GameTrigger):
                 self.triggered_milestones.add(milestone)
                 if milestone == 5:
                     lines = [
-                        "🔥 You're on a hot streak! 5 kills!",
-                        "⚡ Dominating! 5 takedowns already!",
-                        "💣 Mid-game menace — 5 kills in!"
-                    ]
+                        f"💥 {your_name} hit 5 kills! Poppin’ off!",
+                        f"⚡ {your_name} is on a hot streak — 5 kills!",
+                    ],
                 elif milestone == 10:
                     lines = [
-                        "💥 Double digits! 10 kills and climbing!",
-                        "🛡️ Unstoppable — 10 enemies down.",
-                        "🏹 10 kills? That’s main character energy."
-                    ]
+                        f"💣 Double digits! {your_name} just hit 10 kills!",
+                        f"🎯 {your_name} is carrying — 10 takedowns in!",
+                    ],
                 elif milestone == 15:
                     lines = [
-                        "👑 Absolute domination — 15 kills and counting!",
-                        "🎯 15 confirmed kills. Are you even human?",
-                        "🚀 You’re breaking the scoreboard — 15 kills!"
+                        f"👑 {your_name} is UNSTOPPABLE — 15 kills now!",
+                        f"🚀 {your_name} just broke the game. 15 kills!",
                     ]
                 messages.append(random.choice(lines))
         return "\n".join(messages) if messages else None
@@ -119,17 +117,16 @@ class DeathTrigger(GameTrigger):
         self.last_deaths = 0
     def check(self, current_data, previous_data):
         deaths = current_data.get("deaths", 0)
+        your_name = current_data.get("your_name", "")
         if deaths > self.last_deaths:
             diff = deaths - self.last_deaths
             self.last_deaths = deaths
             death_lines = [
-                f"💀 Oof... went down again. That’s {deaths} total.",
-                f"☠️ RIP! Death #{deaths}. Shake it off!",
-                f"⚰️ Another one bites the dust. Count: {deaths}.",
-                f"📉 That's {deaths} deaths... let’s turn this around.",
-                f"🔻 Things are getting rough. {deaths} deaths now.",
-                f"😵‍💫 You're feeding faster than the minions.",
-                f"😬 Yikes! {deaths} deaths. Time for a strategy shift?"
+                f"☠️ {your_name} went down again. Total deaths: {deaths}.",
+                f"📉 That’s {your_name}'s {deaths} death... stay safe!",
+                f"⚰️ {your_name} is feeding — {deaths} deaths now!",
+                f"😵 {your_name} got caught again. Count: {deaths}.",
+                f"🩸 {your_name} fell. That’s death #{deaths}."
             ]
             return random.choice(death_lines)
         return None

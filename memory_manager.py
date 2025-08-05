@@ -185,7 +185,9 @@ def query_memory_relevant(prompt, user=None, top_k_user=4, top_k_global=2):
             fallback_results = collection.query(
                 query_texts=[prompt],
                 n_results=top_k_user,
-                where=None
+                where={
+                "type": {"$nin": ["game", "recap", "game_event"]}
+                }
             )
             fallback_docs = fallback_results.get("documents", [[]])[0]
             fallback_metas = fallback_results.get("metadatas", [[]])[0]

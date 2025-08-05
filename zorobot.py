@@ -52,24 +52,27 @@ RIOT_API_KEY = os.getenv("RIOT_API_KEY")
 USE_ELEVENLABS = os.getenv("USE_ELEVENLABS", "true").lower() == "true"
 
 # === Global Configs ===
-VALID_MODES = ["hype", "rage", "sarcastic", "wholesome","troll","smartass","tsundere","edgelord","cospiracist","genz"]
+VALID_MODES = ["hype", "rage", "sarcastic", "wholesome","troll","smartass","tsundere","edgelord","conspiracist","genz"]
 # 🧠 Choose model and voice ID
-ELEVEN_MODEL = "eleven_turbo_v2_5"
+ELEVEN_MODEL = "eleven_multilingual_v2"  # eleven_v3 , eleven_turbo_v2_5, eleven_multilingual_v2
 ELEVEN_VOICE_ID = "TxGEqnHWrfWFTfGW9XjX"  # ← keep only as default/fallback
 # 🔊 Personality to Voice ID mapping
 VOICE_BY_MODE = {
     "hype": "TxGEqnHWrfWFTfGW9XjX",       # Josh
-    "smartass": "TxGEqnHWrfWFTfGW9XjX",   # Josh
-    "cospiracist": "TxGEqnHWrfWFTfGW9XjX",# Josh
+    "smartass": "UgBBYS2sOqTuMpoF3BR0",   # Mark Natural Conversations
+    "conspiracist": "Yko7PKHZNXotIFUBG7I9",# George
     "rage": "21m00Tcm4TlvDq8ikWAM",      # Rachel
-    "wholesome": "21m00Tcm4TlvDq8ikWAM",  # Rachel
-    "tsundere": "21m00Tcm4TlvDq8ikWAM",   # Rachel
-    "genz": "21m00Tcm4TlvDq8ikWAM",       # Rachel
-    "sarcastic": "2EiwWnXFnvU5JabPnv8n",  # Clyde
+    "wholesome": "WtA85syCrJwasGeHGH2p",  # Ember Energetic
+    "tsundere": "uYXf8XasLslADfZ2MB4u",   # Hope - Your bestie
+    "genz": "zGjIP4SZlMnY9m93k97r",       # Hope The PodCaster
+    "sarcastic": "vBKc2FfBKJfcZNyEt1n6",  # Finn
     "troll": "2EiwWnXFnvU5JabPnv8n",      # Clyde
-    "edgelord": "2EiwWnXFnvU5JabPnv8n",   # Clyde
+    "edgelord": "IRHApOXLvnW57QJPQH2P",   # Adam Brooding
 }
-# Replace this with the actual ID Josh #TxGEqnHWrfWFTfGW9XjX | Clyde #2EiwWnXFnvU5JabPnv8n | Rachel #21m00Tcm4TlvDq8ikWAM
+# Replace this with the actual ID Josh #TxGEqnHWrfWFTfGW9XjX | Clyde #2EiwWnXFnvU5JabPnv8n | Rachel #21m00Tcm4TlvDq8ikWAM | Laura  FGY2WhTYpPnrIDTdsKH5
+# George  Yko7PKHZNXotIFUBG7I9 | Jessica  cgSgspJ2msm6clMCkdW9  | Jessica Anne Bogart  flHkNRp1BlvT73UL6gyz | Hope - Your bestie  uYXf8XasLslADfZ2MB4u
+# Mark Natural Conversations, UgBBYS2sOqTuMpoF3BR0| Hope The PodCaster, zGjIP4SZlMnY9m93k97r |Hey Its Brad, f5HLTX707KIM4SzJYzSz | Donovan, DMyrgzQFny3JI1Y1paM5
+# Finn, vBKc2FfBKJfcZNyEt1n6 | Adam Brooding, IRHApOXLvnW57QJPQH2P | Ember Energetic, WtA85syCrJwasGeHGH2p
 vote_counts = defaultdict(int)
 voted_users = set()  # Track users who already voted this round
 tts_lock = asyncio.Lock()
@@ -115,7 +118,7 @@ triggers = [
     #MultikillEventTrigger(player_name="Zoro2000"),
 ]
 # 🔥 TTS cooldown config
-GAME_TTS_COOLDOWN = 4  # seconds
+GAME_TTS_COOLDOWN = 15  # seconds
 last_game_tts_time = 0  # global timestamp tracker
 AUTO_RECAP_INTERVAL = 600  # every 10 minutes
 tts_busy = False
@@ -188,8 +191,10 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
     else:
         memory_text = "⚠️ No relevant memory context found."
     if type_ in ["game", "recap"]:
+        prompt = "Απάντησε στα ελληνικά.\n" + prompt
         enhanced_prompt = build_game_prompt(memory_text, prompt)
     else:
+        prompt = "Απάντησε στα ελληνικά.\n" + prompt
         enhanced_prompt = (
             f"You have access to the following recent memories from the stream:\n"
             f"{memory_text}\n\n"
@@ -204,7 +209,7 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
             "✅ Only extract and store *useful knowledge*, not a paraphrase of the question.\n"
         )
     response = client.chat.completions.create(
-        model="gpt-4.1-2025-04-14",  #gpt-4o , gpt-3.5-turbo , chatgpt-4o-latest , gpt-4o-2024-05-13 , gpt-4o-2024-11-20 , gpt-4.1-2025-04-14
+        model="chatgpt-4o-latest",  #gpt-4o , gpt-3.5-turbo , chatgpt-4o-latest , gpt-4o-2024-05-13 , gpt-4o-2024-11-20 , gpt-4.1-2025-04-14
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": enhanced_prompt}
@@ -219,24 +224,10 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
         parsed = json.loads(response.choices[0].message.content)
         ai_text = parsed.get("answer", "").strip()
         if enable_memory and parsed.get("store") and parsed.get("summary"):
-            if type_ in ["game", "recap"] and user in ["GameMonitor", "RecapEngine"]:
-                add_game_memory(
-                    content=parsed["summary"],
-                    stream_date=tracker.get_stream_date(),
-                    game_number=tracker.get_game_number(),
-                    metadata={"user": user, "source": type_}
-                )
-                log_event2(f"[Game Memory Stored] Summary: {parsed['summary']}")
-            else:
-                add_to_memory(
-                    content=parsed["summary"],
-                    type_=type_,
-                    stream_date=tracker.get_stream_date(),
-                    game_number=tracker.get_game_number(),
-                    metadata={"user": user, "source": type_}
-                )
-                log_event2(f"[Memory Stored] Summary: {parsed['summary']}")
-            # 🧠 Only trigger summary for AskAI entries
+            summary = parsed["summary"]
+            stream_date = tracker.get_stream_date()
+            game_number = tracker.get_game_number()
+            store_memory_if_valid(summary, type_, user, stream_date, game_number)
             if type_ == "askai":
                 try:
                     if count_user_memories(user, type_="askai") >= 5:
@@ -329,6 +320,29 @@ def classify_prompt_type(prompt):
     except Exception as e:
         log_error(f"[Prompt Type Classifier ERROR] {e}")
         return "askai"
+
+def store_memory_if_valid(summary, type_, user, stream_date, game_number):
+    """Stores memory if the type and user meet criteria. Logs results."""
+    if type_ in ["game", "recap"]:
+        if user in ["GameMonitor", "RecapEngine"]:
+            add_game_memory(
+                content=summary,
+                stream_date=stream_date,
+                game_number=game_number,
+                metadata={"user": user, "source": type_}
+            )
+            log_event2(f"[Game Memory Stored] Summary: {summary}")
+        else:
+            log_event2(f"[Memory Skipped] Game-type memory ignored for user: {user}")
+    else:
+        add_to_memory(
+            content=summary,
+            type_=type_,
+            stream_date=stream_date,
+            game_number=game_number,
+            metadata={"user": user, "source": type_}
+        )
+        log_event2(f"[Memory Stored] Summary: {summary}")
 
 def estimate_cost(model, prompt_tokens, completion_tokens):
     if model.startswith("gpt-3.5-turbo"):
@@ -489,10 +503,11 @@ async def safe_add_to_tts_queue(item):
     await tts_queue.put((priority, item))
 
 async def tts_monitor_loop():
-    global tts_busy
+    global tts_busy, last_game_tts_time, buffered_game_events
     while True:
         await asyncio.sleep(0.4)
-        if not tts_busy and buffered_game_events:
+        timestamp_now = time.time()
+        if not tts_busy and buffered_game_events and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
             print("🧹 TTS is free, flushing buffered game events...")
             mode = get_current_mode()
             # ✨ Use dynamic prompt
@@ -506,6 +521,7 @@ async def tts_monitor_loop():
             ai_text = get_ai_response(prompt=combined_prompt, mode=mode, user="GameMonitor", type_="game")
             await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
             buffered_game_events.clear()
+            last_game_tts_time = timestamp_now
 
 def _get_log_path(log_filename: str) -> str:
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -587,27 +603,15 @@ async def clear_state_after_delay(delay_seconds=6):
             trigger.reset()
 
 def handle_game_data(data, your_player_data, current_data, merged_results):
-    global last_game_tts_time, buffered_game_events, tts_busy
+    global buffered_game_events, tts_busy
     timestamp_now = time.time()
     game_time_seconds = current_data["last_game_time"]
     mode = get_current_mode()
     # ✅ Now let TTS play as usual
     if merged_results:
         is_game_over = any("Game over" in msg for msg in merged_results)
-        # ✅ NEW: Prioritize buffered lines first, even if TTS is free
-        if buffered_game_events:
-            buffered_game_events.extend(merged_results)
-            print(f"🧠 Buffering {len(merged_results)} new lines — TTS is free but backlog exists.")
-            return
-        if not tts_busy and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
-            combined_prompt = get_random_commentary_prompt(mode) +  "\n" + "\n".join(merged_results)
-            log_merged_prompt(combined_prompt)
-            ai_text = get_ai_response(prompt=combined_prompt, mode=mode, user="GameMonitor", type_="game")
-            asyncio.create_task(safe_add_to_tts_queue(("game", "GameMonitor", ai_text)))
-            last_game_tts_time = timestamp_now
-        elif tts_busy:
-            buffered_game_events.extend(merged_results)
-            print(f"🧠 TTS busy — buffering {len(merged_results)} merged game lines")
+        buffered_game_events.extend(merged_results)
+        log_merged_prompt("📥 Buffered trigger:\n" + "\n".join(merged_results))  # optional debug
         # ✅ Always mark game ended if detected (even if we didn’t send TTS yet)
         if is_game_over and not previous_state.get("game_ended"):
             previous_state["game_ended"] = True
@@ -1025,7 +1029,7 @@ class ZoroTheCasterBot(commands.Bot):
             viewers = 42
         await self.on_raid_event(FakeRaidEvent())
 
-    @commands.command(name="askai")
+    @commands.command(name="askai", aliases=["ασκαι"])
     async def askai(self, ctx):
         user = ctx.author.name
         now = datetime.now(timezone.utc)

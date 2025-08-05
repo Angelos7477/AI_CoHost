@@ -43,7 +43,7 @@ COMMENTARY_TEMPLATES = {
         "🗡️ Speak like the fate of the world depends on these plays:",
         "React like you're narrating an anime fight to the death:",
     ],
-    "cospiracist": [
+    "conspiracist": [
         "🕵️ React like everything happening is part of a grand conspiracy:",
         "Spin a wild theory about why that play just happened:",
         "Connect unrelated events like a mad genius uncovering the truth:",
