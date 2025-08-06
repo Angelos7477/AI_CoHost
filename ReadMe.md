@@ -1,4 +1,4 @@
-## 🚀 Getting Started (optional)
+## 🚀 Getting Started 
 This project is currently tailored for personal use and not packaged for public deployment. However, if you're technically inclined, you can clone the repo and configure the environment variables and API keys in `zorobot.py`.
 
 # ZoroBot – AI Twitch Co-Host for League of Legends
