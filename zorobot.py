@@ -60,11 +60,11 @@ ELEVEN_VOICE_ID = "TxGEqnHWrfWFTfGW9XjX"  # ← keep only as default/fallback
 VOICE_BY_MODE = {
     "hype": "TxGEqnHWrfWFTfGW9XjX",       # Josh
     "smartass": "UgBBYS2sOqTuMpoF3BR0",   # Mark Natural Conversations
-    "conspiracist": "Yko7PKHZNXotIFUBG7I9",# George
+    "conspiracist": "TxGEqnHWrfWFTfGW9XjX",# Josh
     "rage": "21m00Tcm4TlvDq8ikWAM",      # Rachel
     "wholesome": "WtA85syCrJwasGeHGH2p",  # Ember Energetic
     "tsundere": "uYXf8XasLslADfZ2MB4u",   # Hope - Your bestie
-    "genz": "zGjIP4SZlMnY9m93k97r",       # Hope The PodCaster
+    "genz": "21m00Tcm4TlvDq8ikWAM",       # Rachel
     "sarcastic": "vBKc2FfBKJfcZNyEt1n6",  # Finn
     "troll": "2EiwWnXFnvU5JabPnv8n",      # Clyde
     "edgelord": "IRHApOXLvnW57QJPQH2P",   # Adam Brooding
