@@ -45,14 +45,14 @@ Follow these steps to add a new personality to ZoroBot:
    - File name must match the personality name (eg. icons/conspiracist.png)
 
 🧠 3. Update the Personality Map (Optional)
-    If you're using a dictionary (like iconMap) in your overlay HTML or Python script, make sure to add the new personality:
-    const iconMap = {
-      ...
-      "conspiracist": "icons/conspiracist.png",
-    };
+   - If you're using a dictionary (like iconMap) in your overlay HTML or Python script, make sure to add the new personality:
+     const iconMap = {
+       ...
+       "conspiracist": "icons/conspiracist.png",
+     };
 
 🛠 4. Update the Bot Configuration
-    - In zorobot.py, add the new personality to your valid modes list.
-    - Update random prompts in prompts/user_prompts/ if you want unique phrases.
-    - Change voice name in zorobot.py if the personality should have a different ElevenLabs voice.
+   - In zorobot.py, add the new personality to your valid modes list.
+   - Update random prompts in prompts/user_prompts/ if you want unique phrases.
+   - Change voice name in zorobot.py if the personality should have a different ElevenLabs voice.
 
