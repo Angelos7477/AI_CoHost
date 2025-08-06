@@ -69,6 +69,18 @@ VOICE_BY_MODE = {
     "troll": "2EiwWnXFnvU5JabPnv8n",      # Clyde
     "edgelord": "IRHApOXLvnW57QJPQH2P",   # Adam Brooding
 }
+VOICE_BY_MODE_Greek = {
+    "hype": "TxGEqnHWrfWFTfGW9XjX",       # Josh
+    "smartass": "n0vzWypeCK1NlWPVwhOc",   # Theos
+    "conspiracist": "Yko7PKHZNXotIFUBG7I9",# George
+    "rage": "n0vzWypeCK1NlWPVwhOc",      # Theos
+    "wholesome": "0oYUKTNPbymIKVAkDQqh",  # Sofia 
+    "tsundere": "C2RGMrNBTZaNfddRPeRH",   # Nila - Warm & Expressive Tamil Voice 
+    "genz": "0oYUKTNPbymIKVAkDQqh",       # Sofia
+    "sarcastic": "EiNlNiXeDU1pqqOPrYMO",  # John Doe - Deep
+    "troll": "2EiwWnXFnvU5JabPnv8n",      # Clyde
+    "edgelord": "IRHApOXLvnW57QJPQH2P",   # Adam Brooding     NFG5qt843uXKj4pFvR7C
+}
 # Replace this with the actual ID Josh #TxGEqnHWrfWFTfGW9XjX | Clyde #2EiwWnXFnvU5JabPnv8n | Rachel #21m00Tcm4TlvDq8ikWAM | Laura  FGY2WhTYpPnrIDTdsKH5
 # George  Yko7PKHZNXotIFUBG7I9 | Jessica  cgSgspJ2msm6clMCkdW9  | Jessica Anne Bogart  flHkNRp1BlvT73UL6gyz | Hope - Your bestie  uYXf8XasLslADfZ2MB4u
 # Mark Natural Conversations, UgBBYS2sOqTuMpoF3BR0| Hope The PodCaster, zGjIP4SZlMnY9m93k97r |Hey Its Brad, f5HLTX707KIM4SzJYzSz | Donovan, DMyrgzQFny3JI1Y1paM5
@@ -83,7 +95,7 @@ ASKAI_QUEUE_LIMIT = 10
 ASKAI_QUEUE_DELAY = 10
 VOTING_DURATION = 300
 last_moodroll_time = 0  # Global cooldown timer
-MOODROLL_COOLDOWN = 60  # seconds
+MOODROLL_COOLDOWN = 1  # seconds
 askai_cooldowns = {}
 askai_queue = asyncio.Queue()
 current_mode_cache = "hype"  # default
@@ -102,23 +114,23 @@ POLL_INTERVAL = 5
 LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 # Basic state snapshot for change detection
 triggers = [
-    HPDropTrigger(threshold_percent=35, min_current_hp=70, cooldown=30),
+    #HPDropTrigger(threshold_percent=35, min_current_hp=70, cooldown=30),
     #CSMilestoneTrigger(step=70),
     KillCountTrigger(),
     DeathTrigger(),
-    GoldThresholdTrigger(cooldown=300),  # ⏱️ 4-minute cooldown
+    #GoldThresholdTrigger(cooldown=300),  # ⏱️ 4-minute cooldown
     FirstBloodTrigger(),       # 🩸
     DragonKillTrigger(),        # 🐉
     GameEndTrigger(),
     AceTrigger(),
     AtakhanKillTrigger(),
     HeraldKillTrigger(),
-    GoldDifferenceTrigger(threshold=4000, even_margin=1000, cooldown=600),
+    #GoldDifferenceTrigger(threshold=4000, even_margin=1000, cooldown=600),
     BaronTrigger(),
     #MultikillEventTrigger(player_name="Zoro2000"),
 ]
 # 🔥 TTS cooldown config
-GAME_TTS_COOLDOWN = 15  # seconds
+GAME_TTS_COOLDOWN = 5.1  # seconds
 last_game_tts_time = 0  # global timestamp tracker
 AUTO_RECAP_INTERVAL = 600  # every 10 minutes
 tts_busy = False
@@ -191,10 +203,10 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
     else:
         memory_text = "⚠️ No relevant memory context found."
     if type_ in ["game", "recap"]:
-        prompt = "Απάντησε στα ελληνικά.\n" + prompt
+        #prompt = "Απάντησε στα ελληνικά.\n" + prompt
         enhanced_prompt = build_game_prompt(memory_text, prompt)
     else:
-        prompt = "Απάντησε στα ελληνικά.\n" + prompt
+        #prompt = "Απάντησε στα ελληνικά.\n" + prompt
         enhanced_prompt = (
             f"You have access to the following recent memories from the stream:\n"
             f"{memory_text}\n\n"
@@ -209,7 +221,7 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
             "✅ Only extract and store *useful knowledge*, not a paraphrase of the question.\n"
         )
     response = client.chat.completions.create(
-        model="chatgpt-4o-latest",  #gpt-4o , gpt-3.5-turbo , chatgpt-4o-latest , gpt-4o-2024-05-13 , gpt-4o-2024-11-20 , gpt-4.1-2025-04-14
+        model="gpt-4.1-2025-04-14",  #gpt-4o , gpt-3.5-turbo , chatgpt-4o-latest , gpt-4o-2024-05-13 , gpt-4o-2024-11-20 , gpt-4.1-2025-04-14
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": enhanced_prompt}
@@ -401,7 +413,9 @@ def push_overlay_later(func, *args, delay=0.1):
 async def tts_worker():
     global tts_busy
     while True:
+        log_merged_prompt(f"⏳ Waiting on tts_queue.get() at {time.time():.3f}")
         _, item = await tts_queue.get()
+        log_merged_prompt(f"✅ Got item from tts_queue at {time.time():.3f}: {item[0]}")
         try:
             tts_busy = True
             log_merged_prompt("🟠 TTS state changed: BUSY")
@@ -469,7 +483,9 @@ async def tts_worker():
                         push_overlay_later(push_commentary_overlay, text, delay=0)
                     except Exception as e:
                         log_error(f"[Overlay Push Game ERROR] {e}")
+                    log_merged_prompt(f"🎤 Begin TTS for: {item[0]} at {time.time():.3f}")
                     await speak_text(text)
+                    log_merged_prompt(f"✅ Finished TTS for: {item[0]} at {time.time():.3f}")
                     try:
                         await push_hide_overlay("commentary")
                     except Exception as e:
@@ -501,6 +517,7 @@ async def safe_add_to_tts_queue(item):
         log_error(f"[EVENTSUB TTS SKIPPED] {item_type.upper()} message dropped. Queue full. EventSub message skipped: {item}")
         return
     await tts_queue.put((priority, item))
+    log_merged_prompt(f"📥 Item added to TTS queue at {time.time():.3f}: {item[0]} | Queue size: {tts_queue.qsize()}")
 
 async def tts_monitor_loop():
     global tts_busy, last_game_tts_time, buffered_game_events
@@ -519,9 +536,10 @@ async def tts_monitor_loop():
             debug_prompt = f"{personality_prompt}\n{numbered_debug}"
             log_merged_prompt(debug_prompt)
             ai_text = get_ai_response(prompt=combined_prompt, mode=mode, user="GameMonitor", type_="game")
+            # 🔁 Second log (post-AI)
+            log_merged_prompt(f"🗣️ AI said:\n{ai_text}")
             await safe_add_to_tts_queue(("game", "GameMonitor", ai_text))
             buffered_game_events.clear()
-            last_game_tts_time = timestamp_now
 
 def _get_log_path(log_filename: str) -> str:
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -603,13 +621,26 @@ async def clear_state_after_delay(delay_seconds=6):
             trigger.reset()
 
 def handle_game_data(data, your_player_data, current_data, merged_results):
-    global buffered_game_events, tts_busy
+    global buffered_game_events, tts_busy, last_game_tts_time
     timestamp_now = time.time()
     game_time_seconds = current_data["last_game_time"]
     mode = get_current_mode()
     # ✅ Now let TTS play as usual
     if merged_results:
         is_game_over = any("Game over" in msg for msg in merged_results)
+        force_speak_now = any(
+            "First Blood" in msg or
+            "🔥 ACE! Your team just wiped them out!" in msg or
+            "💀 Your team just got **aced**" in msg or
+            "stole" in msg or
+            "dragon" in msg or
+            "Feats of Strength" in msg
+            for msg in merged_results
+        )
+        if force_speak_now:
+            last_game_tts_time = 0  # 👈 force instant TTS
+        else:
+            last_game_tts_time = timestamp_now
         buffered_game_events.extend(merged_results)
         log_merged_prompt("📥 Buffered trigger:\n" + "\n".join(merged_results))  # optional debug
         # ✅ Always mark game ended if detected (even if we didn’t send TTS yet)
