@@ -54,7 +54,7 @@ USE_ELEVENLABS = os.getenv("USE_ELEVENLABS", "true").lower() == "true"
 # === Global Configs ===
 VALID_MODES = ["hype", "rage", "sarcastic", "wholesome","troll","smartass","tsundere","edgelord","conspiracist","genz"]
 # 🧠 Choose model and voice ID
-ELEVEN_MODEL = "eleven_multilingual_v2"  # eleven_v3 , eleven_turbo_v2_5, eleven_multilingual_v2
+ELEVEN_MODEL = "eleven_turbo_v2_5"  # eleven_v3 , eleven_turbo_v2_5, eleven_multilingual_v2
 ELEVEN_VOICE_ID = "TxGEqnHWrfWFTfGW9XjX"  # ← keep only as default/fallback
 # 🔊 Personality to Voice ID mapping
 VOICE_BY_MODE = {
@@ -221,16 +221,17 @@ def get_ai_response(prompt, mode, user=None, type_="askai", enable_memory=True):
             "✅ Only extract and store *useful knowledge*, not a paraphrase of the question.\n"
         )
     response = client.chat.completions.create(
-        model="gpt-4.1-2025-04-14",  #gpt-4o , gpt-3.5-turbo , chatgpt-4o-latest , gpt-4o-2024-05-13 , gpt-4o-2024-11-20 , gpt-4.1-2025-04-14
+        model="gpt-5-2025-08-07",  #gpt-4o, chatgpt-4o-latest, gpt-5-2025-08-07, gpt-4o-2024-11-20, gpt-4.1-2025-04-14, gpt-5-mini-2025-08-07
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": enhanced_prompt}
         ],
         response_format={"type": "json_object"},  # ✅ correct for openai>=1.x
-        max_tokens=200,
-        temperature=0.7,
-        frequency_penalty=0.3,
-        presence_penalty=0.3
+        max_completion_tokens=300,
+        temperature=1,
+        reasoning_effort="minimal"  # ✅ correct new param   minimal
+        #frequency_penalty=0.3,
+        #presence_penalty=0.3
     )
     try:
         parsed = json.loads(response.choices[0].message.content)
@@ -365,6 +366,10 @@ def estimate_cost(model, prompt_tokens, completion_tokens):
         return (prompt_tokens / 1000 * 0.002) + (completion_tokens / 1000 * 0.008)
     elif model.startswith("gpt-4"):
         return (prompt_tokens / 1000 * 0.03) + (completion_tokens / 1000 * 0.06)
+    elif model.startswith("gpt-5-mini"):
+        return (prompt_tokens / 1000000 * 0.25) + (completion_tokens / 1000000 * 2)
+    elif model.startswith("gpt-5"):
+        return (prompt_tokens / 1000000 * 1.25) + (completion_tokens / 1000000 * 10)
     return 0.0
 
 def get_event_reaction(event_type, user):

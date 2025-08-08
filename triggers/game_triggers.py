@@ -468,6 +468,9 @@ class FeatsOfStrengthTrigger(GameTrigger):
     def __init__(self):
         self.triggered = False
         self.triggered_team = None
+        self.seen_event_ids = set()
+        self.team_kills = defaultdict(int)
+        self.first_brick_claimed = {}
         self.voidgrub_sets_checked = 0
         self.voidgrub_objective_counts = defaultdict(int)
         self.horde_kill_buffer = []
@@ -480,6 +483,9 @@ class FeatsOfStrengthTrigger(GameTrigger):
     def reset(self):
         self.triggered = False
         self.triggered_team = None
+        self.seen_event_ids.clear()
+        self.team_kills.clear()
+        self.first_brick_claimed.clear()
         self.voidgrub_sets_checked = 0
         self.voidgrub_objective_counts.clear()
         self.horde_kill_buffer.clear()
@@ -503,6 +509,10 @@ class FeatsOfStrengthTrigger(GameTrigger):
                 self.team_objectives[team_name]["DragonKill"] = count
         team_progress = {}
         for event in events:
+            event_id = event.get("EventID")
+            if not event_id or event_id in self.seen_event_ids:
+                continue
+            self.seen_event_ids.add(event_id)
             killer_name = event.get("KillerName", "")
             killer_player = next((p for p in all_players if p.get("summonerName") == killer_name), None)
             team = killer_player.get("team", "UNKNOWN") if killer_player else None
@@ -512,42 +522,53 @@ class FeatsOfStrengthTrigger(GameTrigger):
                     team = "ORDER"
                 elif killer_name.startswith("Minion_T200"):
                     team = "CHAOS"
+                if team:
+                    self.first_brick_claimed[team] = True  # ✅ persist it
             if not team:
                 continue
             if team not in team_progress:
                 team_progress[team] = {
-                    "kills": 0,
-                    "first_brick": False,
+                    "kills": self.team_kills[team],
+                    "first_brick": self.first_brick_claimed.get(team, False),  # ✅ FIXED
                     "objectives": Counter(self.team_objectives[team])
                 }
             # === Track team progress ===
             if event["EventName"] == "ChampionKill":
-                team_progress[team]["kills"] += 1
+                self.team_kills[team] += 1
             elif event["EventName"] == "FirstBrick":
                 team_progress[team]["first_brick"] = True
+                self.first_brick_claimed[team] = True
             elif event["EventName"] in ["HeraldKill", "BaronKill", "AtakhanKill"]:
                 team_progress[team]["objectives"][event["EventName"]] += 1
                 self.team_objectives[team][event["EventName"]] += 1
             elif event["EventName"] == "HordeKill":
                 self._add_horde_kill(event, team)
         # === Evaluate completed Voidgrub sets ===
-        new_sets = len(self.horde_kill_buffer) // 3
-        while self.voidgrub_sets_checked < new_sets:
-            start = self.voidgrub_sets_checked * 3
-            set_kills = self.horde_kill_buffer[start:start+3]
-            team_counts = Counter(entry["team"] for entry in set_kills)
-            most_common_team, count = team_counts.most_common(1)[0]
-            if count >= 2:
-                if self.voidgrub_objective_counts[most_common_team] < 2:
-                    self.voidgrub_objective_counts[most_common_team] += 1
-                    self.team_objectives[most_common_team]["Voidgrub"] += 1
-            self.voidgrub_sets_checked += 1
+        #total_sets = (len(self.horde_kill_buffer) + 2) // 3  # ceil(len/3)
+        #while self.voidgrub_sets_checked < total_sets:
+        #    start = self.voidgrub_sets_checked * 3
+        #    set_kills = self.horde_kill_buffer[start:start+3]
+        #    if len(set_kills) == 0:
+        #        break  # Nothing to score
+        #    team_counts = Counter(entry["team"] for entry in set_kills)
+        #    most_common_team, count = team_counts.most_common(1)[0]
+        #    if count >= 2:
+        #        if self.voidgrub_objective_counts[most_common_team] < 2:
+        #            self.voidgrub_objective_counts[most_common_team] += 1
+        #            self.team_objectives[most_common_team]["Voidgrub"] += 1
+        #    self.voidgrub_sets_checked += 1
+        # ✅ Award Voidgrub objective to any team with ≥ 2 Voidgrub kills
+        voidgrub_counts = Counter(entry["team"] for entry in self.horde_kill_buffer)
+        for team, count in voidgrub_counts.items():
+            if count >= 2 and self.voidgrub_objective_counts[team] < 1:
+                self.voidgrub_objective_counts[team] = 1
+                self.team_objectives[team]["Voidgrub"] += 1
         # ✅ Ensure progress is present for both teams
         for team in ["ORDER", "CHAOS"]:
             if team not in team_progress:
                 team_progress[team] = {
-                    "kills": 0,
-                    "first_brick": False,
+                    "kills": self.team_kills[team],
+                    "first_brick": self.first_brick_claimed.get(team, False),  # ✅ FIXED
                     "objectives": Counter(self.team_objectives[team])
                 }
         print("[Voidgrub Debug] Completed sets:", dict(self.voidgrub_objective_counts))
