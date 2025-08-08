@@ -522,7 +522,7 @@ async def safe_add_to_tts_queue(item):
 async def tts_monitor_loop():
     global tts_busy, last_game_tts_time, buffered_game_events
     while True:
-        await asyncio.sleep(0.4)
+        await asyncio.sleep(0.47)
         timestamp_now = time.time()
         if not tts_busy and buffered_game_events and (timestamp_now - last_game_tts_time) >= GAME_TTS_COOLDOWN:
             print("🧹 TTS is free, flushing buffered game events...")
@@ -634,6 +634,7 @@ def handle_game_data(data, your_player_data, current_data, merged_results):
             "💀 Your team just got **aced**" in msg or
             "stole" in msg or
             "dragon" in msg or
+            "Baron Nashor" in msg or
             "Feats of Strength" in msg
             for msg in merged_results
         )
