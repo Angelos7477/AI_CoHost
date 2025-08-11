@@ -51,10 +51,10 @@ async def broadcast(data):
         connected_clients.difference_update(disconnected)
 
 async def start_server():
-    print(f"Starting WebSocket server on ws://localhost:{PORT}")
+    print(f"Starting WebSocket server on ws://127.0.0.1:{PORT}")
     print("💡 start_server() launched")
     try:
-        async with websockets.serve(handler, "localhost", PORT):
+        async with websockets.serve(handler, "127.0.0.1", PORT):
             await asyncio.Future()
     except asyncio.CancelledError:
         print("🛑 Overlay WebSocket server shutdown cleanly.")
