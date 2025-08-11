@@ -390,7 +390,7 @@ def speak_sync(text, voice_id=ELEVEN_VOICE_ID):
                 text=text,
                 voice=voice_id,
                 model=ELEVEN_MODEL,
-                voice_settings=VoiceSettings(stability=0.5, similarity_boost=0.8)
+                voice_settings=VoiceSettings(stability=0.5, similarity_boost=0.8, speed=1.05)
             )
             play(audio)
             return
